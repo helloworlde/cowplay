@@ -65,6 +65,7 @@ build: web apk
 
 # prepare-bluez.sh refuses an existing directory; an earlier runtime is reused as is.
 $(BLUEZ_RUNTIME)/SHA256SUMS:
+	mkdir -p $(dir $(BLUEZ_RUNTIME))
 	$(CONTAINER) 'apk add --no-cache curl >/dev/null; sh scripts/prepare-bluez.sh $(BLUEZ_RUNTIME)'
 
 apk: check-version $(BLUEZ_RUNTIME)/SHA256SUMS
