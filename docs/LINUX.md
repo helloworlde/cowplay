@@ -1,6 +1,6 @@
 # Linux x86_64／ARM64 发布与安装
 
-本轮补齐两个普通 Linux 发行包及其 GitHub 自动构建、签名、下载和安装升级流程。OpenWrt 使用原签名 APK 通道；Linux 通用包不装入 OpenWrt，不携带 F50 的私有 BlueZ 运行时，也不改变系统蓝牙、热点、驱动或固件。
+支持普通 Linux 两种架构的构建、签名、发布和安装升级。OpenWrt 使用原签名 APK 通道；Linux 通用包不装入 OpenWrt，不携带 F50 的私有 BlueZ 运行时，也不改变系统蓝牙、热点、驱动或固件。
 
 ## 发布附件
 
@@ -16,13 +16,13 @@
 
 构建使用对应架构的原生 Alpine/musl 工具链。打包前运行 CowPlay 自身的静态 ELF 检查：64 位小端、CPU 架构正确、无动态加载器及共享库依赖。原 OpenWrt `verify-image` 默认仍只接受 AArch64；新参数可显式检查 `arm64` 或 `x86_64`。
 
-运行无需 Rust、Node、Python 或编译器。主机仍需现有 BlueZ、D-Bus、系统 CA、合适的 BR/EDR 蓝牙适配器、已经配置的 Wi-Fi 热点，以及用户合法持有的身份与 HTTPS 资料。构建成功和安装器测试不能替代真实手机／媒体验收。32 位 ARM 不在本轮范围。
+运行无需 Rust、Node、Python 或编译器。主机仍需现有 BlueZ、D-Bus、系统 CA、合适的 BR/EDR 蓝牙适配器、已经配置的 Wi-Fi 热点，以及用户合法持有的身份与 HTTPS 资料。构建成功和安装器测试不能替代真实手机／媒体验收。不支持 32 位 ARM。
 
 ## 从 GitHub 安装
 
 先在主机官方包源安装 `curl`、OpenSSL、系统 CA 及安装所需标准工具。安装器使用 POSIX sh、coreutils（含 `timeout`、`mv -T`）、util-linux `flock`、tar；只有 systemd 模式使用 `systemctl`。不自动运行 apt/dnf 或修改系统蓝牙服务。
 
-以下以 r17 为例；仓库公开并发布正式签名 Release 后才有可下载附件。指纹由管理员从可信渠道核对，不能从同一未验证下载中自动接受新公钥。本轮不执行以下主机安装命令。
+以下以 r17 为例；仓库公开并发布正式签名 Release 后才有可下载附件。指纹由管理员从可信渠道核对，不能从同一未验证下载中自动接受新公钥。以下命令由管理员在目标主机上执行。
 
 ```sh
 (
@@ -65,7 +65,40 @@
 
 首次安装有 systemd 时只放置 unit 并执行 daemon-reload，不启用、不启动服务。没有正在运行的 systemd 时只安装程序文件与材料。配置时必须显式使用 `bluetooth.kind=system`；省略该字段会沿用 F50 默认后端。参照包内配置示例准备合法身份、控制器地址、热点信息、HTTPS 文件及独立管理令牌，保护配置／私钥文件为 0600、私有目录为 0700。准备完成后管理员显式启动，或选择启用开机自启。
 
-完整 Linux 配置与硬件边界见 [兼容说明](LINUX-COMPAT-2026-11-10.md)。
+系统蓝牙与管理配置见下文。
+
+## 系统蓝牙与私有配置
+
+完整配置示例：`packaging/config.linux.example.json`；保留原 `packaging/config.example.json` 用于 F50。Linux 平台部分如下，其余 receiver 字段仍必须提供合法持有的配件身份、真实控制器地址、已有热点和可验证的 HTTPS 证书：
+
+```json
+{
+  "state_dir": "/var/lib/cowplay",
+  "bluetooth": {"kind": "system", "adapter": 0},
+  "policy": {"format": "json", "path": "/var/lib/cowplay/policy.json"},
+  "ctl_socket": "/var/lib/cowplay/control.sock",
+  "management_token_file": "/var/lib/cowplay/management-token"
+}
+```
+
+`bluetooth_address_file` 仅 F50 必需；省略 `bluetooth` 永远选 F50，不按运行环境自动切换。`policy` 和旧 `uci_config` 不能同时配置。可用 `{"format":"uci","path":"/var/lib/cowplay/cowplay.uci"}` 保留 UCI 文本格式。策略文件缺失时创建新文件，JSON 权限 0600；JSON 拒绝未知字段、无效枚举、越界画面参数，保存仍复用现有策略语义和原子替换。默认屏幕项沿用 UCI 支持的 quality、call、rail_side；各屏幕完整画面偏好仍在既有屏幕记录中。system 新建策略记录当前配置端口，避免首启／重启地址漂移；已有策略中的 port/domain 是下次启动的地址来源。
+
+可选管理令牌是 **32 个随机字节的 64 位十六进制文本**，与六位投屏令牌分离。按配置示例启用时，须先在目标主机创建该文件，例如由用户本机执行 `umask 077; openssl rand -hex 32 > /var/lib/cowplay/management-token`。文件须由运行服务的用户持有且无组／其他用户权限；读取使用同一 O_NOFOLLOW 文件描述符校验和限长读取。错误配置在任何蓝牙动作前失败。不需要该管理能力时省略 management_token_file。
+
+通用管理页提供服务／连接状态、画面上限及自动降帧、投屏令牌读取、HTTPS 证书成对验证和热切换；手机控制台继续提供手机配对、切换、屏幕偏好、诊断与日志。管理 POST 必须同时满足独立 Bearer 管理令牌和既有 Origin 校验，普通浏览器 cookie 或投屏令牌不授予维护权限，令牌仅保存在当前页面内存，不进 URL、localStorage 或 sessionStorage。HTTP 端口迁移、系统服务控制、恢复出厂未暴露给管理 HTTP；热点、路由、启动、升级由主机工具负责。DDNS 和其他维护仍可使用同一私有控制 socket；system 的 network 迁移命令会明确拒绝 OpenWrt 专用操作。
+
+配置完整后可由管理员执行：
+
+```sh
+cowplay probe
+cowplay serve /etc/cowplay/config.json
+cowplay ctl status /var/lib/cowplay/control.sock
+cowplay ctl reload /var/lib/cowplay/control.sock
+# 可选 Tesla 授权：第三参数使其与服务使用同一 BlueZ 后端与适配器
+cowplay tesla-pair /var/lib/cowplay/tesla-ble.json /etc/cowplay/config.json
+```
+
+`packaging/cowplay.service` 是可选 systemd 模板，不自动安装或启用，不配置自动重启。它等待 network-online.target 并要求现有 bluetooth.service；主机的 wait-online／AP 配置必须覆盖所选接口与地址，不能把 network-online 本身当作热点已经就绪的证据。模板使用 `/usr/local/bin/cowplay` 与上述配置路径。F50 继续使用原 procd/APK 生命周期。
 
 ## 升级与失败恢复
 
@@ -77,13 +110,13 @@
 
 切换前失败且旧服务已安全停止时可请求恢复旧服务；停服前就会写入并落盘 `recovery-required`。断电、强制退出或切换后失败均不会盲目重跑或自动降级，事务记录、旧版本和备份保留；完整成功后才清除恢复门禁。管理员应核对当前链接、systemd 日志、版本和状态兼容性，完成恢复后才解除该标记。服务 active 只代表进程状态，不等于已经完成 CarPlay 会话、媒体、触控或音频验收。
 
-## 自动构建和本地验证
+## 自动构建和验证入口
 
-GitHub 工作流为 Linux x86_64、ARM64 设置独立原生 runner 矩阵。两者构建嵌入前端、静态 Rust 程序，运行 Rust 测试、安装器测试和真实本地 TLS 下载验签测试，再上传各自 tar.gz。OpenWrt 双 APK 使用独立 job。发布阶段等待全部构建与测试成功，使用原有专用发布密钥签名所有附件；先建立 draft 并上传全部白名单资产，完成后才公开 Release。PR／构建阶段没有生产私钥。
+GitHub 工作流为 Linux x86_64、ARM64 设置独立原生 runner 矩阵。两者构建嵌入前端、静态 Rust 程序，运行 Rust 测试、安装器测试和真实本地 TLS 下载验签测试，再上传各自 tar.gz。OpenWrt 双 APK 复用 ARM64 job 中已构建的静态程序。发布阶段等待全部构建与测试成功，使用专用发布密钥签名所有附件；先建立 draft 并上传全部白名单资产，完成后才公开 Release。PR／构建阶段没有生产私钥。
 
-签名 Environment、Secret、公钥指纹变量以及许可公开审查沿用 [发布说明](GITHUB-RELEASE-UPDATES.md)。构建结果以对应提交的 GitHub Actions 日志为准；构建通过不代表已经发布生产签名附件，实际主机或 F50 安装仍须管理员授权。
+签名 Environment、Secret、公钥指纹变量以及许可公开审查沿用 [发布说明](RELEASES.md)。构建结果以对应提交的 GitHub Actions 日志为准；构建通过不代表已经发布生产签名附件，实际主机或 F50 安装仍须管理员授权。
 
-本地构建与测试入口：
+构建与测试入口：
 
 ```sh
 # 使用匹配架构的原生 musl Linux 构建环境；先构建 web/dist。

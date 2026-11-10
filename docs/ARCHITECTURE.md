@@ -1,6 +1,6 @@
 # CowPlay 当前模块边界
 
-本文描述协议、应用、平台与管理层边界。OpenWrt/F50 为默认后端；普通 Linux 支持显式系统 BlueZ，见 [兼容说明](LINUX-COMPAT-2026-11-10.md)。
+本文描述协议、应用、平台与管理层边界。OpenWrt/F50 为默认后端；普通 Linux 支持显式系统 BlueZ，见 [兼容说明](LINUX.md)。
 
 ## 协议、车辆数据与服务
 

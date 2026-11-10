@@ -17,18 +17,28 @@ def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--repository', required=True, help='GitHub OWNER/REPO')
+    parser.add_argument('--repository', help='GitHub OWNER/REPO')
+    parser.add_argument('--policy', type=Path, help='Release policy instead of explicit repository/compatibility arguments')
     parser.add_argument('--core', type=Path, required=True)
     parser.add_argument('--luci', type=Path, required=True)
     parser.add_argument('--sign-key', type=Path, required=True, help='Existing private release key; never copied into output')
     parser.add_argument('--upgrade-from', action='append', default=[], help='Explicitly tested compatible source version; repeat as needed')
-    parser.add_argument('--openwrt-release', action='append', required=True, help='Explicitly tested compatible firmware release; repeat as needed')
+    parser.add_argument('--openwrt-release', action='append', default=[], help='Explicitly tested compatible firmware release; repeat as needed')
     parser.add_argument('--output', type=Path, required=True, help='New directory')
     parser.add_argument('--apk', default='apk', help='APK v3 executable')
     parser.add_argument('--openssl', default='openssl')
     parser.add_argument('--linux-x86_64', type=Path)
     parser.add_argument('--linux-arm64', type=Path)
     args = parser.parse_args()
+    if args.policy:
+        if args.repository or args.upgrade_from or args.openwrt_release:
+            parser.error('--policy cannot be combined with explicit policy values')
+        policy = json.loads(args.policy.read_text())
+        args.repository = policy['repository']
+        args.upgrade_from = policy['upgrade_from']
+        args.openwrt_release = policy['openwrt_releases']
+    if not args.repository or not args.openwrt_release:
+        parser.error('repository and compatible OpenWrt releases are required')
     if bool(args.linux_x86_64) != bool(args.linux_arm64):
         parser.error('both Linux architectures must be supplied together')
     if not re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*', args.repository):

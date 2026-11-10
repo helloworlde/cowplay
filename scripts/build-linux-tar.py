@@ -4,7 +4,6 @@ import argparse
 import gzip
 import io
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -17,7 +16,7 @@ parser.add_argument('arch', choices=['x86_64', 'arm64'])
 parser.add_argument('output', type=Path)
 parser.add_argument('--checker', type=Path, help='Native CowPlay ELF checker, for cross packaging')
 args = parser.parse_args()
-version = re.search(r'--info version:([^\s]+)', (project / 'scripts/build-apk.sh').read_text()).group(1)
+version = (project / 'packaging/VERSION').read_text().strip()
 assert re.fullmatch(r'(0|[1-9][0-9]{0,8})(\.(0|[1-9][0-9]{0,8})){2}-r(0|[1-9][0-9]{0,8})', version)
 policy = json.loads((project / 'packaging/release-policy.json').read_text())
 subprocess.run([str((args.checker or args.binary).resolve()), 'verify-image', str(args.binary.resolve()), args.arch], check=True)

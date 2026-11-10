@@ -1641,12 +1641,4 @@ pub mod discovery;
 
 pub mod pairing_store;
 
-#[cfg(feature = "resource-probe")]
-impl Hub {
-    pub fn resource_snapshot(&self) -> serde_json::Value {
-        let a = self.audio.lock().unwrap();
-        serde_json::json!({"video_bytes":self.queue.lock().unwrap().bytes(),"audio_bytes":a.bytes,"audio_packets":a.packets.len(),"viewer":self.viewer.load(Ordering::Acquire),"control_free":self.control.capacity()})
-    }
-}
-
 pub mod phones;

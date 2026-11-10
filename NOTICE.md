@@ -1,7 +1,7 @@
 # Sources and attribution
 
 Based on LIVI by Lasse Heitgres (https://github.com/f-io/LIVI).
-The temporary Ultra feasibility probe reuses LIVI protocol code under GPL-3.0-or-later,
+The Ultra implementation reuses LIVI protocol code under GPL-3.0-or-later,
 with the additional attribution term in crates/server/src/ultra/livi/NOTICE.
 The pinned revision is recorded in research/ultra-livi-lock.json. The initial probe used synthetic vehicle data; the current runtime uses the
 authenticated Tesla read-only feed described below, with unavailable values omitted.
@@ -10,7 +10,7 @@ This work is GPL-3.0-only; see LICENSE. Rust pairing-window timing and confirmat
 
 OpenWrt packaging and F50 board integration are being researched from openwrt-dashplay and DashPlay. Their Java/Python runtime is not part of the Rust binary. No accessory identities, certificates, private keys, signing keys or vendor firmware are included. CarPlay and iPhone are Apple trademarks; this project is independent.
 
-Platform-independent Rust core/server and the browser media assets are reused from the owner local f50-carplay-rust project. Their original PlayPort/DiPlay/DashPlay attribution and GPL-3.0 source notices are retained. The exact public source revisions are in research/reused-upstream-lock.json; imported local Rust source hashes are in research/reused-rust.json. Android/JNI, Java and Python runtimes are not included.
+Platform-independent Rust core/server and the browser media assets are reused from the owner local f50-carplay-rust project. Their original PlayPort/DiPlay/DashPlay attribution and GPL-3.0 source notices are retained. The exact public source revisions are in research/reused-upstream-lock.json. Android/JNI, Java and Python runtimes are not included.
 
 OpenWrt support adds Rust F50 child-process ownership, BlueZ Agent1/Profile1, bounded pairing, Unix FD transport, local-only import and procd packaging. zbus is used for D-Bus; Rust dependency versions and checksums are locked in Cargo.lock. Browser HTML/JS management assets are built directly into the executable.
 

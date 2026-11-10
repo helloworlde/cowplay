@@ -6,9 +6,7 @@ apk_tool=${APK_TOOL:-apk}
 output=${1:?Usage: build-luci-apk.sh OUTPUT_APK}
 here=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 app=$here/luci-app-cowplay
-# Released together with the core package; build-apk.sh holds that version.
-version=$(sed -n 's/.*--info version:\([^ ]*\).*/\1/p' "$here/scripts/build-apk.sh")
-[ -n "$version" ] || { echo 'Cannot read the package version from build-apk.sh' >&2; exit 1; }
+version=$(cat "$here/packaging/VERSION")
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 files=$stage/files

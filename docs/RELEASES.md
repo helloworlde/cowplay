@@ -1,6 +1,6 @@
 # GitHub Release 安装、更新与系统升级恢复
 
-本轮实现位于独立分支 `codex/github-release-updater`，目标仓库为 `helloworlde/cowplay`。候选包修订号为 `0.3.14-r17`，核心与 LuCI 同版本交付。未推送、未配置远端 Secrets、未发布 Release、未操作 F50。仓库当前为私有且尚无 Release，用户计划后续公开；设备端先支持公开 Release，不保存 GitHub 访问令牌。
+发布来源为 `helloworlde/cowplay`。核心、LuCI 和 Linux 包共用 `packaging/VERSION`；设备端支持公开的稳定 Release，不保存 GitHub 访问令牌。
 
 ## 应用更新
 
@@ -33,7 +33,7 @@ LuCI「系统 → GitHub 安装与升级」可检查最新稳定版或指定 `vX
 
 需要支持 APK v3 的匹配 OpenWrt，以及可用的官方系统包源。公钥文件本身也从 GitHub 下载；其预期 SHA-256 指纹须先通过可信渠道核对，不能仅凭同次下载的一份校验值建立信任。指纹可随管理员确认的安装说明提供，不需要手工传输公钥文件。设备只接收公钥，发布私钥留在签名端。
 
-以下示例在设备上以 root 执行，版本固定为同一标签，避免下载期间 latest 改变导致两个包版本混用。本轮未操作设备，也未实际下载尚不存在的 Release。
+以下示例在设备上以 root 执行，版本固定为同一标签，避免下载期间 latest 改变导致两个包版本混用。命令由管理员在匹配的已授权设备上执行。
 
 ```sh
 (
@@ -83,7 +83,7 @@ APK 原生校验签名、包架构和依赖，但不代替发布清单中的固�
 已有经可信渠道核验的静态 CowPlay 二进制时，也可使用下面的 CLI 方式，作为替代入口；不执行未经验证的远程安装脚本。
 
 ```sh
-# 仅为管理员在获授权设备上执行的示例；本轮没有执行。
+# 管理员仅在获授权设备上执行。
 # /tmp/cowplay-bootstrap 必须已通过可信独立渠道完成完整性核验。
 /tmp/cowplay-bootstrap update check </dev/null
 /tmp/cowplay-bootstrap update status </dev/null
@@ -116,19 +116,22 @@ printf '%s\n' '{"id":"检查结果中的32位任务编号"}' | /tmp/cowplay-boot
 - 恢复缓存只含 CowPlay 双包，不缓存整个固件依赖闭包。新固件缺少 `openssl`、`jsonfilter`、LuCI/核心依赖或 APK v3 时安全失败，应用可能尚未装回，但私有状态与签名缓存仍在；管理员需先安装兼容依赖或选择包含它们的正确固件，再运行 `/usr/libexec/cowplay-restore` 重试。
 - 结果写入缓存下 `result` 并通过系统日志与 LuCI 展示。恢复失败不自动清理缓存，不联网获取任意依赖，不尝试刷机。
 - 所有恢复数据包含设备私有资料，系统升级备份也必须留在可信私有位置，不可上传 Release、Issues 或 Actions artifacts。
-- 不能将 F50 的厂商 5.4 内核/驱动迁移到官方 6.12 固件。本能力不代表已验证任意固件或真实系统升级；本轮未刷机、未执行真实 sysupgrade。
+- 不能将 F50 的厂商 5.4 内核/驱动迁移到官方 6.12 固件。本能力不代表已验证任意固件或真实系统升级；真实固件升级需要单独验收。
 
-## GitHub Actions 自动构建与 Release
+## GitHub Actions 构建与签名发布
 
-`.github/workflows/release.yml` 在 main、PR 和手动触发时构建验证；推送 `vX.Y.Z-rN` 标签时，校验标签与包版本一致且提交位于 main 历史，然后构建 ARM64 静态核心与 noarch LuCI，运行 Rust、包生命周期、系统恢复和真实 APK 签名测试。构建阶段无发布私钥。
+工作流在 main、PR 和手动触发时执行：
 
-Linux x86_64／ARM64 的原生构建、通用 tar.gz、签名下载和安装升级另见 [Linux 发布安装说明](LINUX-RELEASES.md)。发布阶段等待 Linux 两架构及 OpenWrt 全部构建测试通过。
+1. x86_64、ARM64 原生 runner 分别构建前端和静态 Rust 程序，运行 Rust、前端逻辑、Linux 安装与签名下载测试，生成 Linux tar.gz。
+2. ARM64 复用同一已构建静态程序生成 OpenWrt 双 APK，验证包生命周期与恢复机制。对本次真实双包使用临时测试密钥签名、导入公钥，隔离安装并执行 LuCI 安装脚本、卸载和重装检查。
+3. 汇集三平台实际产物，以临时测试密钥执行完整发布打包和验签。测试私钥与测试签名附件不上传。
+4. 仅当 `vX.Y.Z-rN` 标签与 `packaging/VERSION` 一致且位于 main 历史时，才进入受保护的生产 release job。
 
-目标仓库标签构建通过后，release job 使用 `release` Environment 的密钥签名并创建 Release，上传白名单文件：两个签名 APK、两个 Linux tar.gz、OpenWrt 清单及其签名、公钥、Linux 下载入口和签名 SHA256SUMS。先上传至 draft，全部完成后才公开 Release。只上传这些文件，不上传工作树、target 全目录、设备记录、日志或私有状态。私钥只临时写入 runner 私有目录并在步骤退出时删除；签包容器禁网络。工作流不替用户修改仓库可见性。
+正式发布先核对生产公钥指纹，再签名两个 APK、两个 Linux 归档、OpenWrt 清单和 SHA256SUMS。上传十个白名单附件到草稿 Release，重新从 GitHub 下载，检查附件集合、签名和每个文件的哈希，全部正确后才公开。失败草稿可重跑续传；已公开 Release 禁止覆盖。草稿含额外附件时拒绝发布，管理员须先核对并清理这些附件。
 
-首次启用需要仓库管理员完成，尚未执行：
+首次发布需要仓库管理员完成：
 
-1. 在可信离线环境创建专用 RSA 发布密钥；不要提交私钥，不复用设备 HTTPS/MFi/Tesla 密钥。
+1. 在可信私有环境创建专用 RSA 发布密钥，不复用设备 HTTPS/MFi/Tesla 密钥：
 
    ```sh
    umask 077
@@ -137,38 +140,15 @@ Linux x86_64／ARM64 的原生构建、通用 tar.gz、签名下载和安装升�
    openssl pkey -in cowplay-release.key -pubout | shasum -a 256
    ```
 
-2. 在 GitHub 创建并保护 `release` Environment，配置允许发布的标签及审批规则（如需要）。工作流中的 `environment: release` 本身不会自动创建这些保护规则。
-3. Environment Secret `COWPLAY_RELEASE_SIGNING_KEY` 保存专用 PEM 私钥；Environment Variable `COWPLAY_RELEASE_PUBLIC_KEY_SHA256` 保存上一步公钥 PEM 字节的 SHA-256 小写十六进制值。签名步骤先核对指纹，使用默认 `GITHUB_TOKEN` 发布，无需新增个人访问令牌。
-4. 管理员独立核对并预置设备公钥与 releases.json。Release 内提供的公钥只能辅助比对，不可从同一次未验证下载中直接建立信任。轮换密钥需经过同样的独立信任更新。
-5. 审查公开源码/许可证交付，配置 `packaging/release-policy.json` 的已验证固件列表和来源版本白名单。更新 Cargo/包版本及既有版本检查后提交，推送匹配标签。签名 Release 全部资产上传后才供设备安装。
+2. 创建并保护 GitHub `release` Environment，限制发布标签及审批权限，并保护 main 和版本标签。工作流的 environment 声明本身不创建审批规则。
+3. Environment Secret `COWPLAY_RELEASE_SIGNING_KEY` 保存专用 PEM 私钥；Environment Variable `COWPLAY_RELEASE_PUBLIC_KEY_SHA256` 保存上述公钥 PEM 字节的 SHA-256 小写十六进制。使用 `GITHUB_TOKEN` 上传，不需要个人访问令牌。
+4. 更新 Cargo 版本、`packaging/VERSION` 与前后端 BUILD_ID；在 `packaging/release-policy.json` 只列出已经验证的来源版本和固件。提交并等待 main CI 成功后，再推送对应版本标签。
+5. 通过独立可信渠道提供公钥指纹。设备只接收公钥，密钥轮换需重新建立信任。私有仓库的匿名设备下载不可用，公开下载须先公开仓库并发布正式 Release。
 
-本地生成资产可使用：
+生产私钥只临时写入 runner 私有目录，步骤退出删除；APK 签名容器禁网络。Release 与 Actions artifacts 不包含设备状态、备份、配对、证书、日志或整个工作树。Linux 安装说明见 [Linux](LINUX.md)。
 
-```sh
-python3 scripts/prepare-github-release.py \
-  --repository helloworlde/cowplay \
-  --core target/apk/cowplay-0.3.14-r17.apk \
-  --luci target/apk/luci-app-cowplay-0.3.14-r17.apk \
-  --sign-key /可信私有路径/cowplay-release.key \
-  --upgrade-from 0.3.14-r16 --openwrt-release 25.12.6 \
-  --output target/release-assets-r17
-```
+## 验证范围
 
-生成工具只对新输出目录中的本地构建包重签并校验，不修改输入包，不上传或发布。读取/重签尚未签名的**本地构建输入**时使用 APK 的 `--allow-untrusted`；设备更新、缓存恢复以及产物校验始终严格验签。`apk adbsign` 对未可信输入的行为在真实工具中已验证，不能省略重签后的 `apk verify`。[APK 签名与校验文档](https://github.com/alpinelinux/apk-tools/tree/v3.0.5/doc) 与 [GitHub Release API](https://docs.github.com/en/rest/releases/releases) 为接口依据。
+CI 检查版本一致性、前端编译与逻辑、Rust workspace、包布局和权限、真实 APK 签名与隔离安装、Linux 安装与恢复门禁、下载验签与归档拒绝、系统升级缓存和完整发布资产签名。具体结果以 [Actions](https://github.com/helloworlde/cowplay/actions) 的提交记录为准。
 
-## 验证入口与未覆盖项
-
-```sh
-cargo test --workspace --locked
-python3 scripts/test-package-lifecycle.py
-python3 scripts/test-sysupgrade-restore.py
-# ARM64 Linux、APK v3、OpenSSL 与 Python；全部在一次性目录中使用合成包和测试密钥
-python3 scripts/test-release-artifacts.py
-LUCI_RUNTIME_DIR=/固定官方LuCI运行时 node scripts/test-updater-luci.mjs
-LUCI_RUNTIME_DIR=/固定官方LuCI运行时 LUCI_DEVICE_APPEND=1 node scripts/test-updater-luci.mjs
-LUCI_RUNTIME_DIR=/固定官方LuCI运行时 node scripts/test-luci-web.mjs
-```
-
-更新测试覆盖 HTTPS CA/大小/截断/HTTP 失败、来源/版本/架构/兼容性、清单签名、包哈希/APK 签名/元数据/依赖、停服等待、备份失败恢复旧服务、安装失败不盲目恢复、首次安装、运行/自启保留、进程退出/终态残留锁与恢复确认。系统恢复测试执行真实恢复 shell 与合成系统工具；真实 APK 产物测试另行使用原生 APK 校验和隔离根安装。浏览器使用固定官方 LuCI 源与合成 ubus，在桌面和 390px 视口验证；设备 append 模式只回放已观察行为。
-
-GitHub Actions 结果以对应提交的运行记录为准；真实 GitHub Release 在线下载、rpcd 真实升级重载/断电、F50 安装、真实系统升级及升级后的 iPhone/媒体验收。模拟通过不能替代这些现场验收；实际设备动作与正式发布仍需管理员授权。
+CI 不操作真实 F50 或 Linux 服务，不代表已通过真实 rpcd 重载、断电、固件升级、iPhone、热点、音频或媒体验收。这些现场检查需要管理员安排，不以进程存活或隔离测试代替。

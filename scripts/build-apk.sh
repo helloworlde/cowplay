@@ -12,6 +12,7 @@ machine=$(dd if="$binary" bs=1 skip=18 count=2 2>/dev/null | od -An -tx1 | tr -d
 checker=${IMAGE_CHECKER:-$binary}
 "$checker" verify-image "$binary"
 here=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+version=$(cat "$here/packaging/VERSION")
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 chmod 755 "$stage"
@@ -28,7 +29,7 @@ cp "$here/packaging/releases.example.json" "$stage/usr/share/cowplay/"
 cp "$here/packaging/config.example.json" "$stage/usr/share/cowplay/"
 cp "$here/LICENSE" "$here/NOTICE.md" "$here/packaging/RUNTIME-NOTICE.md" "$here/packaging/TESLA-PROTOCOL-LICENSE" "$stage/usr/share/cowplay/"
 chmod 755 "$stage/usr/bin/cowplay" "$stage/etc/init.d/cowplay" "$stage/etc/init.d/cowplay-restore" "$stage/usr/libexec/cowplay-restore"
-"$apk_tool" mkpkg --info name:cowplay --info version:0.3.14-r17 \
+"$apk_tool" mkpkg --info name:cowplay --info "version:$version" \
     --info arch:aarch64_generic --info license:GPL-3.0-only \
     --info 'description:CowPlay wireless CarPlay receiver with private BlueZ/D-Bus userspace' \
     --info 'depends:procd ubus jsonfilter ca-bundle openssl-util' \

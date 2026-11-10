@@ -16,8 +16,8 @@ CowPlay 是面向已安装 MU300 OpenWrt 的中兴 F50 的 Rust 无线 CarPlay �
 | --- | --- |
 | `README.md` | 构建、安装、连接流程及目标环境 |
 | `docs/ARCHITECTURE.md` | 当前模块职责、依赖方向、兼容入口及平台边界 |
-| `docs/GITHUB-RELEASE-UPDATES.md`、`docs/LINUX-RELEASES.md` | 签名、发布、下载与升级 |
-| `docs/LINUX-COMPAT-2026-11-10.md` | Linux 系统 BlueZ、配置与平台边界 |
+| `docs/RELEASES.md`、`docs/LINUX.md` | 签名、发布、下载与升级 |
+| `docs/LINUX.md` | Linux 系统 BlueZ、配置与平台边界 |
 | `src/main.rs`、`src/service.rs` | CLI 与服务生命周期组合 |
 | `src/bluetooth.rs`、`src/bluetooth/`、`src/phone_flow.rs`、`src/rfcomm.rs` | 蓝牙管理、控制器名称及手机会话生命周期 |
 | `src/platform/` | F50 初始化、OpenWrt/UCI 与主机采样原语；当前运行仍依赖 F50 |
@@ -57,7 +57,7 @@ CowPlay 是面向已安装 MU300 OpenWrt 的中兴 F50 的 Rust 无线 CarPlay �
 
 - 保留 Rust workspace 与 TypeScript/Vite 工具链，依赖由现有锁文件约束；不以解决构建为由随意升级或重新生成锁文件。新增或替换依赖先说明必要性、许可与影响并取得授权。
 - 相同的页面行为、样式和 API 处理复用 `web/src/shared/` 等现有实现。修改 `web/src/` 后通过构建更新 `web/dist/`；后端嵌入构建产物，不手工修改生成文件代替源码。
-- `web/src/build.ts` 与 `crates/server/src/build_info.rs` 的 `BUILD_ID`、`PROTOCOL` 保持一致；修改协议时同步两端及相应测试。打包版本核对 `Cargo.toml`、`scripts/build-apk.sh` 和包生命周期脚本，避免版本漂移。
+- `web/src/build.ts` 与 `crates/server/src/build_info.rs` 的 `BUILD_ID`、`PROTOCOL` 保持一致；修改协议时同步两端及相应测试。打包版本核对 `Cargo.toml`、`packaging/VERSION` 和包生命周期脚本，避免版本漂移。
 - 连接、配对和重试保持有界、可取消、可清理，保留手机独立配对记录；失败不自动清配对，不靠无限重试掩盖问题。涉及会话切换时验证旧会话释放、迟到响应隔离、停止后再次连接及失败恢复。
 - 分别报告网页连接、蓝牙/iAP2 认证、Wi-Fi、CarPlay 会话、收到媒体和浏览器实际绘制状态；不能用进程存活、HTTP 成功、蓝牙已连或手机自身出声代替完整功能验收。
 
@@ -69,13 +69,11 @@ CowPlay 是面向已安装 MU300 OpenWrt 的中兴 F50 的 Rust 无线 CarPlay �
 | --- | --- |
 | Rust、协议、服务 | `cargo test --workspace --locked`；部分测试需回环 TCP/UDP，沙箱禁止监听时如实报告环境限制 |
 | 前端源码、嵌入资源 | `npm run build --prefix web`；执行 TypeScript 检查并生成 `web/dist/`，随后构建或测试受影响的 Rust 代码 |
-| 手机配对与切换 | 先构建前端，再运行 `node scripts/test-pairing-web.mjs`；依赖本机已安装的 Chrome，使用合成 API 与真实 DOM |
-| 投屏、触控与恢复 | 先构建前端，再运行 `node scripts/test-viewer-web.mjs`；依赖本机 Chrome/TypeScript，合成解码器不能代替真实媒体 |
 | 包升级、卸载脚本 | `python3 scripts/test-package-lifecycle.py`；隔离验证停止等待、恢复运行状态与卸载保留数据 |
 | AArch64 构建与 APK | 按 `README.md` 使用现有构建脚本；需匹配的 musl/Rust 工具链及支持 mkpkg 的 APK v3，先验证 ELF 与私有运行时闭包 |
 | 纯文档与规则入口 | 核对链接、路径、命令与差异；不因此启动服务或执行设备测试 |
 
-`scripts/test-lifecycle.sh`、`scripts/test-device-service.sh`、`scripts/test-installed-package.sh` 会操作服务或软件包；`scripts/test-apk.sh` 需要隔离的 ARM64 Linux APK 测试根。先读脚本、核对环境和授权，不把它们当作无副作用的本地检查。
+`make test-apk` 仅在一次性 ARM64 Linux OpenWrt 根安装实际双包；不要把它指向真实设备状态目录。前端逻辑检查使用 `make test-web`，不依赖本机浏览器或截图工具。
 
 按改动验证默认尺寸的页面布局、状态、错误提示与恢复入口。报告测试环境及限制；合成回归、空闲启停和短时通过均不能替代真实 iPhone、双手机切换、热点中断、长期运行、音频或真实车机验收。进度变化更新相应 `docs/` 记录，不把易过期的版本号、测试数量或设备运行状态写进本规则。
 

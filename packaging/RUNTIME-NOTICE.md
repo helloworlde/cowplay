@@ -20,4 +20,3 @@ Upstream projects: https://www.bluez.org/ (BlueZ), https://dbus.freedesktop.org/
 (musl), https://libexpat.github.io/ (Expat), https://github.com/PCRE2Project/pcre2
 (PCRE2), and https://gcc.gnu.org/ (libgcc, including the GCC Runtime Library Exception).
 These components retain their respective licenses; CowPlay does not relicense them.
-This local development artifact has no release signature and has not been published.
