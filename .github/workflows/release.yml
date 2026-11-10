@@ -10,7 +10,7 @@ permissions:
   contents: read
 concurrency:
   group: cowplay-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
   build:
     strategy:
@@ -99,7 +99,6 @@ jobs:
               apk add --no-cache openssl python3 curl >/dev/null
               python3 scripts/test-package-lifecycle.py
               python3 scripts/test-sysupgrade-restore.py
-              python3 scripts/test-release-artifacts.py
             '
           make test-apk TARGET_DIR=target/linux
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

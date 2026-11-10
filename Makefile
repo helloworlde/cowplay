@@ -69,10 +69,10 @@ test-package:
 	python3 scripts/test-sysupgrade-restore.py
 	python3 scripts/test-linux-install.py
 	python3 scripts/test-linux-download.py
-	python3 scripts/test-release-artifacts.py
 
 test-apk:
 	@test -f $(CORE_APK) && test -f $(LUCI_APK)
-	$(CONTAINER) 'apk add --no-cache curl openssl >/dev/null; \
+	$(CONTAINER) 'apk add --no-cache curl openssl python3 >/dev/null; \
+		python3 scripts/test-release-artifacts.py; \
 		root=$$(mktemp -d target/apk-install.XXXXXX); rmdir "$$root"; \
 		sh scripts/test-luci-apk.sh $(CORE_APK) $(LUCI_APK) "$$root"'
