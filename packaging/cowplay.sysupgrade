@@ -1,0 +1,20 @@
+# Sourced by OpenWrt sysupgrade; invalidate stale cached apps before the backup is made.
+cowplay_preserve_guard() {
+    local list="$1" cache=/etc/cowplay/firmware-restore id version reason
+    [ -f "$cache/current" ] || return 0
+    id=$(cat "$cache/current")
+    case "$id" in ''|*[!0-9a-f]*) return 0;; esac
+    [ "${#id}" -eq 32 ] || return 0
+    reason=
+    if [ -e /etc/cowplay/updates/active ] || [ -e /var/run/cowplay-network/active ]; then
+        reason='application or port transaction was unfinished before firmware upgrade'
+    else
+        version=$(jsonfilter -i "$cache/$id/cowplay-release.json" -e '@.version' 2>/dev/null)
+        [ -n "$version" ] && apk --no-network info --exists "cowplay=$version" "luci-app-cowplay=$version" >/dev/null 2>&1 || reason='cached packages did not match installed apps before firmware upgrade'
+    fi
+    if [ -n "$reason" ]; then
+        (umask 077; printf '%s\n' "$reason" > "$cache/blocked") || return 1
+        printf '%s\n' "$cache/blocked" >> "$list"
+    fi
+}
+append sysupgrade_init_conffiles cowplay_preserve_guard

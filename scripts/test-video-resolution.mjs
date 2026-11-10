@@ -1,0 +1,22 @@
+// Replay a declaration change where the phone keeps its previous decoded dimensions.
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import ts from '../web/node_modules/typescript/lib/typescript.js';
+const source=fs.readFileSync(new URL('../web/src/video.ts',import.meta.url),'utf8');
+const compile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
+const protocol='data:text/javascript;base64,'+Buffer.from(compile(fs.readFileSync(new URL('../web/src/protocol.ts',import.meta.url),'utf8'))).toString('base64');
+const js=compile(source).replaceAll("'./protocol'",JSON.stringify(protocol));
+const {VideoPlayer}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+globalThis.window=globalThis;
+const canvas={width:0,height:0,getContext:()=>({clearRect(){},drawImage(){}})};
+const player=new VideoPlayer(canvas);player.onFrame=()=>{};player.onResolutionChange=()=>{};player.onError=()=>{};
+const decoder={close(){}};
+const config=(width,height)=>({width,height,codec:'h264',codecData:new Uint8Array()});
+const frame={displayWidth:1920,displayHeight:1080,timestamp:0};
+player.adopt(decoder,false,config(1920,1080));player.paint(frame);
+player.close();player.adopt(decoder,false,config(3840,2160));
+assert.equal(player.stats().width,0,'no decoded dimensions before a frame in the new stream');
+player.paint(frame);
+assert.deepEqual([canvas.width,canvas.height],[1920,1080],'canvas must follow actual decoded media, even if unchanged from the old stream');
+assert.deepEqual([player.stats().width,player.stats().height],[1920,1080]);
+player.close();console.log('PASS declaration change keeps canvas and measured resolution tied to the current decoded frame');

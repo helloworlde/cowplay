@@ -1,0 +1,34 @@
+#!/bin/sh
+# Create only our policy. Never change wireless, the service state or its boot setting on install.
+if [ ! -e /etc/config/cowplay ]; then
+    umask 077
+    cat > /etc/config/cowplay <<'UCI'
+config cowplay 'main'
+    option enabled '1'
+    option port '18443'
+    option max_res '1080p'
+    option max_fps '60'
+    option bitrate 'auto'
+    option stall_ms '2000'
+    option retries '3'
+    option stall_card '1'
+    option token_required '1'
+    option token_remember 'forever'
+    option ask_when_multi '1'
+    option ask_timeout '5'
+    option redirect_http '1'
+    option cert_source 'acme'
+    option ddns_enabled '0'
+    option ddns_mode 'luci'
+    option ddns_provider 'cloudflare'
+    option ddns_interval '10'
+    option log_level 'info'
+    option log_store 'ram'
+    option log_keep '7'
+config defaults 'screen'
+    option quality 'auto'
+    option call 'bt'
+    option rail_side 'left'
+UCI
+fi
+exit 0

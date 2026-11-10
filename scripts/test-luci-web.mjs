@@ -1,0 +1,86 @@
+import {luciConfirmation} from './lib/luci-confirmation.mjs';
+import assert from 'node:assert/strict';import {start} from './lib/ui-browser.mjs';import {startFixture} from './lib/ui-fixture.mjs';import {startLuciFixture} from './lib/luci-fixture.mjs';if(!process.env.LUCI_RUNTIME_DIR)throw Error('LUCI_RUNTIME_DIR must contain official LuCI luci/cbi/rpc/ui/uci/validation/fs/form JS files');const service=await startFixture(),{fixture}=service,luci=await startLuciFixture(process.env.LUCI_RUNTIME_DIR,service.origin,{deviceAppend:process.env.LUCI_DEVICE_APPEND==='1'}),origin=luci.origin;const b=await start(),checks=[],shots=[];const delay=ms=>new Promise(r=>setTimeout(r,ms));
+try{await fixture({mode:'session',auth:true,phase:'closed',code:null,open:false});await b.viewport(1440,1240);await b.goto(origin+'/luci#overview');await b.wait(()=>b.evaluate("!!document.querySelector('.cw-tabs')"),'LuCI view');
+const click=async text=>{assert.ok(await b.evaluate(`(()=>{const b=[...document.querySelectorAll('button,a')].find(e=>e.offsetParent!==null&&(e.getAttribute('aria-label')??e.textContent.trim())===${JSON.stringify(text)});if(!b||b.disabled)return false;b.click();return true})()`),'button '+text);await delay(150)};
+const noNullChildren=async()=>assert.deepEqual(await b.evaluate("(()=>{const w=document.createTreeWalker(document.querySelector('.cw'),NodeFilter.SHOW_TEXT),bad=[];while(w.nextNode())if(w.currentNode.nodeValue==='null'||w.currentNode.nodeValue==='undefined')bad.push(w.currentNode.parentElement.outerHTML.slice(0,180));return bad})()"),[],'optional LuCI children must not render as null or undefined');
+for(const [id,title] of [['overview','概览'],['devices','设备与访问'],['display','投屏策略'],['network','网络与证书'],['diag','实时数据'],['system','系统']]){await click(title);if(id==='diag')await b.wait(()=>b.evaluate("document.querySelector('[data-page=diag]').textContent.includes('实时数据')"),'diagnosis');if(id==='diag')await click('开始采样');shots.push(await b.shot('luci-'+id+'-1440'));await noNullChildren();assert.ok(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'));checks.push(title+' page');}
+assert.equal(await b.evaluate("/体检|建议|正常范围|需处理/.test(document.querySelector('.cw').textContent)"),false,'all LuCI panes omit assessments and recommendations');
+await click('概览');
+assert.equal(await b.evaluate("document.querySelectorAll('.cw-endpoints > .cw-panel').length"),3);
+assert.deepEqual(await b.evaluate("[...document.querySelectorAll('.cw-kpi > span')].map(e=>e.textContent)"),['输入帧率','绘制帧率','往返时间 RTT','视频码率']);
+assert.equal(await b.evaluate("document.querySelector('.cw-footer').hidden"),true,'read-only overview has no unrelated save controls');
+await click('投屏策略');
+assert.deepEqual(await b.evaluate("[...document.querySelector('select[id$=\".max_fps\"]').options].map(o=>Number(o.value))"),[30,60]);
+assert.equal(await b.evaluate("document.querySelector('select[id$=\".max_res\"]').value"),'1080p');
+checks.push('selectable resolution presets and 30/60 frame rate options');
+await fixture({mode:'connecting',generation:45,phase:'Confirm',request:6,code:'000042',open:true});await click('设备与访问');
+await b.wait(()=>b.evaluate("document.querySelector('[data-page=devices]').textContent.includes('000 042')"),'LuCI pairing code');
+const pairUrl=await b.evaluate("[...document.querySelectorAll('[data-page=devices] a')].find(e=>e.textContent==='打开配对页确认或拒绝')?.href");assert.equal(pairUrl,service.origin+'/pair');shots.push(await b.shot('luci-manual-confirmation'));
+await b.goto(pairUrl);await b.wait(()=>b.evaluate("document.getElementById('phone-passkey')?.textContent==='000 042'&&!document.getElementById('phone-reject').disabled"),'same request in pairing page');await b.evaluate("document.getElementById('phone-reject').click()");await b.wait(async()=>(await fixture({})).cmds.some(x=>x.cmd==='confirmPair'&&x.generation===45&&x.request===6&&x.accept===false),'LuCI flow explicit rejection');
+await b.goto(origin+'/luci#overview');await b.wait(()=>b.evaluate("!!document.querySelector('.cw-tabs')"),'LuCI return');checks.push('LuCI code links to the same authorized pairing request for confirmation or rejection');
+// Diagnostic tabs replace content, and polling preserves the selected view.
+await click('实时数据');
+for(const [title,expected] of [['设备信息','车机屏幕'],['时间线','当前没有 CarPlay 会话'],['日志','运行日志'],['进程与配置','当前 CowPlay 配置'],['实时数据','连接检查与导出']]){
+ await click(title);await b.wait(()=>b.evaluate(`document.querySelector('[data-page=diag]').textContent.includes(${JSON.stringify(expected)})`),title);
+ assert.equal(await b.evaluate("document.querySelectorAll('[data-diag][aria-selected=true]').length"),1);
+ if(title==='设备信息'){await delay(2200);assert.equal(await b.evaluate("[...document.querySelectorAll('[data-page=diag] h3')].some(x=>x.textContent==='结论')"),false)}
+ await noNullChildren();
+ shots.push(await b.shot('luci-diag-'+title));
+}checks.push('five diagnostic views switch exclusively and survive polling');
+const originalDiag=await(await fetch(service.origin+'/api/diag')).json();
+await fixture({diagPatch:{verdict:{level:'warn',title:'不应显示的自动建议',detail:'不应出现的结论',action:{kind:'smooth',label:'不应出现的修复'}},checks:originalDiag.checks.map((c,i)=>i===0?{...c,known:false}:i===1?{...c,value:45,text:'45 ms',ok:false}:c)}});
+await click('实时数据');
+if(await b.evaluate("[...document.querySelectorAll('button')].some(e=>e.offsetParent!==null&&e.textContent==='开始采样')"))await click('开始采样');
+await b.wait(()=>b.evaluate("document.querySelector('.cw-measurements').textContent.includes('45 ms')"),'raw measurement above old threshold');
+assert.deepEqual(await b.evaluate("[...document.querySelectorAll('.cw-sample dd')].slice(0,3).map(e=>e.textContent)"),['—','45 ms','0 %']);
+assert.equal(await b.evaluate("/不应显示|不应出现|正常范围|需处理/.test(document.querySelector('[data-page=diag]').textContent)"),false);
+assert.equal(await b.evaluate("document.querySelectorAll('.cw-measurements > section').length"),4,'all four sources include F50 CPU and temperature');
+checks.push('unknown is distinct from zero; raw outlying data remains visible without conclusions or suggested actions');
+await fixture({diagPatch:originalDiag});
+await click('开始检查');await b.wait(()=>b.evaluate("document.querySelector('[data-page=diag]').textContent.includes('用时 12 ms')"),'readable segment results');await noNullChildren();checks.push('connection check renders observations and elapsed time without a health score');
+await click('日志');await b.wait(()=>b.evaluate("!!document.querySelector('select[aria-label=\"日志级别\"]')"),'log selector');await b.evaluate("(()=>{const e=document.querySelector('select[aria-label=\"日志级别\"]');e.value='warn';e.dispatchEvent(new Event('change'));})()");await b.wait(async()=>(await(await fetch(origin+'/__calls')).json()).some(x=>x.method==='logs'&&x.args.level==='warn'),'warn filter');assert.ok((await(await fetch(origin+'/__calls')).json()).some(x=>x.method==='logs'&&x.args.level==='warn'));checks.push('log filter uses the real RPC level');
+await click('网络与证书');assert.ok(await b.evaluate("document.querySelector('[data-page=network]').textContent.includes('car.example.test')"));assert.equal(await b.evaluate("[...document.querySelectorAll('button')].find(e=>e.textContent==='回滚到上一张证书').disabled"),true);checks.push('certificate metadata and unavailable rollback');
+await click('系统');const enableBefore=(await(await fetch(origin+'/__calls')).json()).filter(x=>x.method==='service').length;await click('开启开机自启');await luciConfirmation(b);await b.wait(()=>b.evaluate("document.querySelector('[data-page=system]').textContent.includes('关闭开机自启')"),'service state after enable');assert.equal((await(await fetch(origin+'/__calls')).json()).filter(x=>x.method==='service').length,enableBefore+1);checks.push('autostart reads state before offering the correct action');
+// Restore actions replace UCI outside the form; the reloaded view must use the new values.
+await b.evaluate("(()=>{const input=document.querySelector('input[aria-label=\"导入 CowPlay 配置\"]'),files=new DataTransfer();files.items.add(new File([\"config cowplay main\\n option max_fps '30'\\n\"],'synthetic.uci'));input.files=files.files;input.dispatchEvent(new Event('change'))})()");
+await b.wait(()=>b.evaluate("![...document.querySelectorAll('button')].find(e=>e.textContent==='恢复配置').disabled"),'configuration read');await click('恢复配置');await luciConfirmation(b);await b.wait(()=>b.evaluate("document.querySelector('select[id$=\".max_fps\"]')?.value==='30'"),'restored configuration replaces cached form');checks.push('configuration import reloads the form from restored UCI');
+await click('设备与访问');const beforeRevoke=(await(await fetch(origin+'/__calls')).json()).filter(x=>x.method==='client_remove').length;await click('移除授权');assert.equal((await(await fetch(origin+'/__calls')).json()).filter(x=>x.method==='client_remove').length,beforeRevoke);await delay(2200);await luciConfirmation(b);assert.equal((await(await fetch(origin+'/__calls')).json()).filter(x=>x.method==='client_remove').length,beforeRevoke+1);checks.push('revoke confirmation survives polling');
+await click('投屏策略');const selects=await b.evaluate("[...document.querySelectorAll('select,input')].map(e=>({id:e.id,name:e.name,type:e.type,value:e.value}))");void selects;
+const fpsId=await b.evaluate("[...document.querySelectorAll('select')].find(e=>e.id.endsWith('.max_fps'))?.id");assert.ok(fpsId);await b.evaluate(`(()=>{const e=document.getElementById(${JSON.stringify(fpsId)});e.value='60';e.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+assert.ok(await b.evaluate("!!document.querySelector('select[id$=\".max_res\"]')"));
+await b.evaluate("(()=>{const e=document.querySelector('select[id$=\".max_res\"]');e.value='2160p';e.dispatchEvent(new Event('change',{bubbles:true}))})()");
+await click('保存');await delay(400);const calls=await(await fetch(origin+'/__calls')).json();assert.ok(calls.some(x=>x.object==='uci'&&x.method==='set'&&x.args.values.max_fps==='60'));assert.ok(calls.some(x=>x.object==='uci'&&x.method==='set'&&x.args.values.max_res==='2160p'));assert.equal(await b.evaluate("document.querySelector('[data-page=network]').textContent.includes('访问地址')"),true);assert.ok(await b.evaluate("document.querySelector('.cw-footer').textContent.includes('已保存，尚未应用')"));assert.ok(await b.evaluate("document.querySelector('[data-page=network]').textContent.includes('当前证书')"));assert.ok(await b.evaluate("document.querySelector('[data-page=devices]').textContent.includes('已授权的车机屏幕')"));checks.push('save stages actual UCI max_fps and 4K max_res and preserves read-only sections');
+
+// Wireless changes are delegated to the system, and never staged by CowPlay.
+await click('网络与证书');
+assert.equal(await b.evaluate("document.querySelectorAll('input[id$=\".ssid\"],input[id$=\".key\"]').length"),0);
+assert.equal((await(await fetch(origin+'/__calls')).json()).some(c=>c.object==='uci'&&c.method==='set'&&c.args.config==='wireless'),false);
+checks.push('system owns wireless configuration');
+await click('系统');await fetch(origin+'/__fixture',{method:'POST',body:JSON.stringify({failStatus:true})});await b.wait(()=>b.evaluate("document.querySelector('.cw-pill').textContent.includes('状态未知')"),'service unavailable state');assert.equal(await b.evaluate("document.querySelector('[data-page=system]').textContent.includes('运行中 · PID')"),false);checks.push('unreachable service invalidates old running status');await fetch(origin+'/__fixture',{method:'POST',body:JSON.stringify({failStatus:false})});
+await b.wait(()=>b.evaluate("document.querySelector('.cw-pill').textContent.includes('运行中')"),'service restored');await click('实时数据');
+const late=await b.evaluate("(async()=>{const v=await L.require('view.cowplay.main'),cp=await L.require('cowplay.rpc'),original=cp.call.bind(cp),before=v.data;v.diagTab='checks';v.sampling=true;await v.loadDiag();const result=await original('diag');let release;cp.call=(method,...args)=>method==='diag'?new Promise(resolve=>release=()=>resolve(result)):original(method,...args);try{const pending=v.loadDiag();v.data={error:'合成服务已停止'};v.update();const cleared=v.diagBody.textContent.includes('当前无法读取服务诊断');release();await pending;return {cleared,stale:!!v.diagBody.querySelector('.cw-measurements')};}finally{cp.call=original;v.data=before;v.update();}})()");assert.deepEqual(late,{cleared:true,stale:false});checks.push('late diagnostic success cannot overwrite unavailable service');
+await fixture({certDays:0});await b.goto(origin+'/luci?cert-boundary#network');await b.wait(()=>b.evaluate("document.querySelector('[data-page=network]')?.textContent.includes('有效 · 不足 1 天')"),'valid certificate boundary');assert.equal(await b.evaluate("document.querySelector('[data-page=network]').textContent.includes('已过期')"),false);await fixture({certDays:null});checks.push('certificate zero days remaining is not marked expired');
+await b.viewport(1280,900);await click('概览');shots.push(await b.shot('luci-overview-1280'));assert.ok(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'));// Load official theme CSS, then change theme/dark mode without rebuilding the app.
+await click('投屏策略');
+const themeMetrics=()=>b.evaluate("(()=>{const c=getComputedStyle(document.querySelector('.cw')),body=getComputedStyle(document.body),btn=getComputedStyle(document.querySelector('.cw-footer .cbi-button-save'));return {font:c.fontFamily,inheritedFont:body.fontFamily,text:c.color,bodyText:body.color,body:body.backgroundColor,button:btn.backgroundColor}})()");
+const light=await themeMetrics();assert.equal(light.font,light.inheritedFont);assert.equal(light.text,light.bodyText);shots.push(await b.shot('luci-bootstrap-light'));
+await b.evaluate("document.documentElement.dataset.darkmode='true'");await delay(120);const dark=await themeMetrics();assert.notEqual(dark.body,light.body);assert.notEqual(dark.text,light.text);assert.equal(dark.text,dark.bodyText);shots.push(await b.shot('luci-bootstrap-dark'));checks.push('Bootstrap light/dark typography and surfaces follow the theme live');
+await b.evaluate("new Promise((resolve,reject)=>{document.documentElement.dataset.darkmode='false';const l=document.getElementById('luci-theme');l.onload=()=>resolve(true);l.onerror=()=>reject(Error('Material theme missing'));l.href='/themes/material.css'})");
+// Compare settled theme styles instead of sampling a partially started transition.
+await b.evaluate("(async()=>{const button=document.querySelector('.cw-footer .cbi-button-save');getComputedStyle(button).backgroundColor;await Promise.all(button.getAnimations().filter(a=>a.effect&&a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})))})()");
+const material=await themeMetrics();assert.equal(material.font,material.inheritedFont);assert.equal(material.text,material.bodyText);assert.notEqual(material.button,light.button);shots.push(await b.shot('luci-material-display'));checks.push('Material native controls and typography follow a different theme');
+await b.viewport(390,844);assert.ok(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'),'Material mobile no document overflow');shots.push(await b.shot('luci-material-390'));checks.push('LuCI mobile navigation and forms remain usable');
+for(const title of ['概览','设备与访问','投屏策略','网络与证书','实时数据','设备信息','时间线','日志','进程与配置','系统']){await click(title);await noNullChildren();assert.ok(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'),'mobile '+title+' has no document overflow');shots.push(await b.shot('luci-mobile-'+title));}
+checks.push('all six LuCI pages fit a 390 px viewport');
+await click('实时数据');
+if(await b.evaluate("[...document.querySelectorAll('button')].some(e=>e.offsetParent!==null&&e.textContent==='开始采样')"))await click('开始采样');
+await b.wait(()=>b.evaluate("document.querySelectorAll('.cw-sample').length===11"),'mobile measurements');
+const pairedReadings=()=>b.evaluate("[...document.querySelectorAll('.cw-sample')].every(e=>{const k=e.querySelector('dt').getBoundingClientRect(),v=e.querySelector('dd').getBoundingClientRect();return Math.abs(k.top-v.top)<4&&v.left>=k.right+8&&k.left>=0&&v.right<=innerWidth})");
+assert.ok(await pairedReadings(),'Material mobile keeps each label beside its complete measured value');
+shots.push(await b.shot('luci-material-measurements-390'));
+await b.evaluate("new Promise((resolve,reject)=>{const l=document.getElementById('luci-theme');l.onload=()=>resolve(true);l.onerror=()=>reject(Error('Bootstrap theme missing'));l.href='/themes/bootstrap.css'})");
+assert.ok(await pairedReadings(),'Bootstrap mobile keeps each label beside its complete measured value');
+shots.push(await b.shot('luci-bootstrap-measurements-390'));
+checks.push('measurement label/value pairs remain on one readable row in both mobile themes');
+assert.deepEqual(b.errors,[]);console.log(JSON.stringify({runtime:process.env.LUCI_DEVICE_APPEND==='1'?'upstream plus observed F50 append replay':'pinned upstream',checks,shots,errors:b.errors},null,2));
+}catch(e){console.log(JSON.stringify({error:String(e),errors:b.errors,text:await b.evaluate('document.body.innerText'),shot:await b.shot('luci-failure')}));throw e;}finally{await b.close();await luci.close();await service.close()}

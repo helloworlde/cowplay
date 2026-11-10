@@ -1,0 +1,9 @@
+.connection-debug{width:100%;min-width:0;max-width:760px;margin:12px auto;background:var(--group,#1c1c1e);border:1px solid var(--sep,#38383a);border-radius:14px;text-align:left;flex-shrink:0;font-size:13px;line-height:1.5;user-select:text}
+.connection-debug summary{padding:14px 16px;cursor:pointer;color:var(--sec);font-weight:600;min-height:48px}
+.connection-debug summary:focus-visible,.connection-debug button:focus-visible{outline:2px solid var(--blue);outline-offset:-3px;border-radius:10px}
+.connection-debug-state{display:grid;grid-template-columns:minmax(84px,1fr) minmax(0,3fr);gap:8px 12px;padding:0 16px;margin:0 0 12px}
+.connection-debug-state dt{color:var(--sec)}.connection-debug-state dd{margin:0;overflow-wrap:anywhere}
+.connection-debug-actions{display:flex;flex-wrap:wrap;gap:8px;padding:0 12px}.connection-debug-actions button{min-height:44px;padding:8px;color:var(--blue-text,#409cff);font:inherit}
+.connection-debug-note{margin:0;padding:0 16px 10px;color:var(--sec);overflow-wrap:anywhere}
+.connection-debug-log{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace;margin:0;padding:12px 16px;background:#0006;border-radius:0 0 14px 14px}
+#c-body>.connection-debug{width:min(760px,var(--content));margin-top:16px}

@@ -1,0 +1,1 @@
+export default { base: '/', build: { target: 'es2022', outDir: 'dist', emptyOutDir: true, rollupOptions: { input: { car: 'car.html', phone: 'phone.html', manage: 'manage.html' } } }, server: { host: '127.0.0.1', port: 5173 } };

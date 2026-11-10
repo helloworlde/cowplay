@@ -1,0 +1,12 @@
+{
+  "name": "LIVI",
+  "url": "https://github.com/f-io/LIVI",
+  "commit": "8440e4b1d1bc3850d0c35a0a4f77df0dfac3dd32",
+  "license": "GPL-3.0-or-later",
+  "additional_terms": "Retain attribution in legal notices and documentation; see crates/server/src/ultra/livi/NOTICE",
+  "scope": "Temporary fake-data Ultra feasibility probe; protocol subset only",
+  "modifications": [
+    "Namespace imports; Rust 2021 compatible conditionals; fake-data wrapper and CowPlay encrypted transport",
+    "Redact request payloads and notification text from logs; add isolated output regression; normalize trailing blank lines"
+  ]
+}

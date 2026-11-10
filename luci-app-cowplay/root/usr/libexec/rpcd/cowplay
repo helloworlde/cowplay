@@ -1,0 +1,52 @@
+#!/bin/sh
+# rpcd exec plugin: LuCI session ACLs control every method. Only fixed ctl methods/actions run.
+case "$1" in
+list)
+cat <<'JSON'
+{"update_status":{},"update_check":{"tag":""},"update_apply":{"id":""},"update_prepare":{"id":""},"update_acknowledge":{"id":""},"status":{},"service_info":{},"network_check":{"port":0},"network_prepare":{"port":0,"fingerprint":"","management_scheme":"","management_port":0},"network_commit":{"id":""},"network_status":{"id":""},"network_confirm":{"id":"","management_scheme":"","management_port":0},"network_cancel":{"id":""},"network_recover":{"id":""},"diag":{},"phones":{},"screens":{},"logs":{"level":"","limit":0,"module":""},"timeline":{"scope":""},"proc":{},"token":{},"cert":{},"config_export":{},"cmd":{"cmd":"","id":""},"client_remove":{"id":""},"token_reset":{},"reload":{},"selftest":{},"bundle":{},"ddns_sync":{},"ddns_token":{"token":""},"mfi_upload":{"certificate":"","private_key":""},"cert_upload":{"cert":"","key":""},"cert_rollback":{},"cert_renew":{},"config_import":{"text":""},"factory_reset":{},"service":{"action":""}}
+JSON
+;;
+call)
+    method=$2
+    input=$(cat)
+    case "$method" in
+    update_status|update_check|update_apply|update_prepare|update_acknowledge)
+        printf '%s' "$input" | /usr/bin/cowplay update "${method#update_}"
+        exit $? ;;
+    esac
+    if [ -e /etc/cowplay/updates/active ]; then
+        case "$method" in
+        status|service_info|diag|phones|screens|logs|timeline|proc|token|cert|config_export|network_check|network_status) ;;
+        *) printf '%s\n' '{"error":"软件更新任务尚未结束；请先检查系统页中的任务状态"}'; exit 0 ;;
+        esac
+    fi
+    case "$method" in
+    network_check|network_prepare|network_commit|network_status|network_confirm|network_cancel|network_recover)
+        action=${method#network_}; [ "$action" != check ] || action=check
+        printf '%s' "$input" | /usr/bin/cowplay network "$action"
+        exit $? ;;
+    token_reset) method=token; input='{"action":"reset"}' ;;
+    token) input='{"action":"show"}' ;;
+    cert_upload) method=cert; input=$(printf '%s' "$input" | jsonfilter -e '@')
+        # The backend interprets an upload by the dedicated ctl entry, never by read-only cert info.
+        method=cert_upload ;;
+    cert_rollback|cert_renew) action=${method#cert_}; method=cert; input="{\"action\":\"$action\"}" ;;
+    cert) input='{"action":"info"}' ;;
+    service_info)
+        if [ ! -x /etc/init.d/cowplay ]; then printf '%s\n' '{"enabled":null,"error":"找不到 CowPlay 启动脚本"}';
+        elif /etc/init.d/cowplay enabled >/dev/null 2>&1; then printf '%s\n' '{"enabled":true}';
+        else printf '%s\n' '{"enabled":false}'; fi
+        exit 0 ;;
+    service)
+        if [ -e /var/run/cowplay-network/active ]; then printf '%s\n' '{"error":"端口接管正在进行，请先完成或恢复任务"}'; exit 0; fi
+        action=$(printf '%s' "$input" | jsonfilter -e '@.action')
+        case "$action" in start|restart|stop|enable|disable) ;; *) printf '%s\n' '{"error":"无效服务操作"}'; exit 0 ;; esac
+        if /etc/init.d/cowplay "$action" >/dev/null 2>&1; then printf '%s\n' '{"ok":true}'; else printf '%s\n' '{"error":"服务操作失败，请检查系统日志"}'; fi
+        exit 0 ;;
+    status|diag|phones|screens|logs|timeline|proc|config_export|cmd|client_remove|reload|selftest|bundle|ddns_sync|ddns_token|config_import|factory_reset|mfi_upload) ;;
+    *) printf '%s\n' '{"error":"未知管理操作"}'; exit 0 ;;
+    esac
+    printf '%s' "$input" | /usr/bin/cowplay ctl "$method"
+;;
+*) exit 1 ;;
+esac

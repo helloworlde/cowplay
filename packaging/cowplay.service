@@ -1,0 +1,16 @@
+[Unit]
+Description=CowPlay wireless CarPlay receiver
+After=network-online.target bluetooth.service
+Wants=network-online.target
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cowplay serve /etc/cowplay/config.json
+StateDirectory=cowplay
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

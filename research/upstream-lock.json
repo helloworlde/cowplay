@@ -1,0 +1,14 @@
+[
+  {
+    "name": "DashPlay",
+    "url": "https://github.com/yizhixiaoheigou/DashPlay.git",
+    "commit": "87b6a77935080f92898f2bb1c74c878c27e1a77a",
+    "license": "GPL-3.0"
+  },
+  {
+    "name": "openwrt-dashplay",
+    "url": "https://github.com/yizhixiaoheigou/openwrt-dashplay.git",
+    "commit": "2218cb7c9e582f906635265617596fc0d26b9f23",
+    "license": "GPL-3.0"
+  }
+]

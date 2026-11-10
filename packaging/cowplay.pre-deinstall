@@ -1,0 +1,12 @@
+#!/bin/sh
+# Offline image assembly must not operate the build host's services.
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+set -eu
+if [ -x /etc/init.d/cowplay ]; then
+    /etc/init.d/cowplay stop
+    /etc/init.d/cowplay disable
+fi
+rm -f /var/run/cowplay-upgrade-running
+# /etc/cowplay contains user identity, certificates and pairings. Preserve it.
+
+[ ! -x /etc/init.d/cowplay-restore ] || /etc/init.d/cowplay-restore disable

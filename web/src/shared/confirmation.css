@@ -1,0 +1,8 @@
+.action-confirmation{box-sizing:border-box;width:calc(100% - 32px);max-width:440px;max-height:calc(100dvh - 32px);margin:auto;padding:24px;border:1px solid #45454b;border-radius:18px;background:#242427;color:#f5f5f7;box-shadow:0 20px 80px #0008;font:16px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;overflow:auto}
+.action-confirmation::backdrop{background:#0009}
+.action-confirmation h2{margin:0 0 10px;font-size:21px;line-height:1.35}.action-confirmation p{margin:0;color:#c6c6ce;font-size:15px}
+.action-confirmation ul{margin:16px 0 0;padding:12px 16px 12px 32px;border-radius:10px;background:#19191b;font-size:14px;line-height:1.8}
+.confirmation-actions{display:flex;gap:10px;margin-top:24px}.confirmation-actions button{flex:1;min-height:46px;border:0;border-radius:10px;padding:10px;font:inherit;cursor:pointer}
+.confirmation-cancel{color:#f5f5f7;background:#3b3b40}.confirmation-accept{color:white;background:#0a84ff}.confirmation-accept.destructive{background:#cf3535}
+.action-confirmation button:focus-visible{outline:2px solid #8bb9ff;outline-offset:3px}
+@media(max-width:420px){.action-confirmation{padding:20px}.confirmation-actions{flex-direction:column-reverse}.confirmation-actions button{flex:none;width:100%}}

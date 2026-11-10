@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=95
+STOP=10
+start_service() {
+    local state=/etc/cowplay/state legacy=/etc/carplay-openwrt/state
+    # One-time copy from the pre-rename layout; the legacy directory is left untouched.
+    if [ ! -e "$state" ] && [ -f "$legacy/config.json" ]; then
+        /usr/bin/cowplay migrate-state "$legacy" "$state" || return 1
+    fi
+    local config=$state/config.json
+    [ -f "$config" ] || { echo "Missing $config: configure existing identity and HTTPS first" >&2; return 1; }
+    procd_open_instance
+    procd_set_param command /usr/bin/cowplay serve "$config"
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param term_timeout 15
+    # A permanent configuration error must stay visible, rather than restart in a tight loop.
+    procd_close_instance
+}

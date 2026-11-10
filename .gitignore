@@ -1,0 +1,15 @@
+/target/
+/research/upstream/
+/private/
+*.key
+*.pem
+*.pk8
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+/deliverables/
+/docs/evidence/
+
+/web/node_modules/

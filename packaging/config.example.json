@@ -1,0 +1,36 @@
+{
+  "state_dir": "/etc/cowplay/state",
+  "bluetooth_address_file": "/etc/cowplay/state/bdaddr",
+  "receiver": {
+    "web": {
+      "bind": "192.0.2.1:18443",
+      "origin": "https://your-host.example:18443",
+      "tls_certificate": "/etc/cowplay/state/web-chain.pem",
+      "tls_private_key": "/etc/cowplay/state/web-key.pem",
+      "access_token": "REPLACE_WITH_YOUR_ACCESS_TOKEN"
+    },
+    "control_bind": "192.0.2.1:7000",
+    "pairing_id": "YOUR_EXISTING_ACCESSORY_ID",
+    "pairing_store_file": "/etc/cowplay/state/airplay-pairing.json",
+    "signing_seed_file": "/etc/cowplay/state/signing-seed",
+    "mfi_pkcs8_file": "/etc/cowplay/state/accessory.pk8",
+    "mfi_certificate_file": "/etc/cowplay/state/accessory.der",
+    "controller_id": null,
+    "controller_key_file": null,
+    "name": "CowPlay",
+    "model": "YOUR_ACCESSORY_MODEL",
+    "manufacturer": "YOUR_ACCESSORY_MANUFACTURER",
+    "device_id": "YOUR_EXISTING_DEVICE_ID",
+    "bluetooth_mac": "YOUR_ACTUAL_BLUETOOTH_MAC",
+    "width": 1280,
+    "height": 720,
+    "pairing_window_seconds": 120,
+    "wifi": {
+      "ssid": "YOUR_EXISTING_AP_SSID",
+      "password_file": "/etc/cowplay/state/wifi-password",
+      "channel": 149,
+      "security": 2,
+      "serial": "YOUR_EXISTING_ACCESSORY_SERIAL"
+    }
+  }
+}

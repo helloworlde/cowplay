@@ -1,0 +1,16 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import ts from '../web/node_modules/typescript/lib/typescript.js';
+const source=fs.readFileSync(new URL('../web/src/shared/frame-progress.ts',import.meta.url),'utf8');
+const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
+const {FrameProgress}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+const p=new FrameProgress();
+assert.equal(p.blockedSince(100,110,10000,2000),null,'quiet painted frame is healthy');
+assert.equal(p.blockedSince(10000,110,10001,2000),null,'new frame after a long idle gets its own budget');
+assert.equal(p.blockedSince(10000,10150,10151,2000),null,'normal delayed paint resets pending input');
+assert.equal(p.blockedSince(11000,10150,11010,2000),null);
+assert.equal(p.blockedSince(12000,10150,13000,2000),11000,'continued arrivals must not postpone a blocked decoder forever');
+assert.equal(p.blockedSince(13000,13010,13011,2000),null,'drawing progress recovers');
+p.reset();
+assert.equal(p.blockedSince(14000,0,16000,2000),14000,'a single pending frame can also become blocked');
+console.log('FRAME_PROGRESS_STATIC_PENDING_RECOVERY_PASSED');

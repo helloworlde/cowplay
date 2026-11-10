@@ -1,0 +1,8 @@
+#!/bin/sh
+# First install only: enable the next-boot service. Configuration is still required;
+# do not start it, touch pairings, or override an existing upgrade's boot preference.
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+set -eu
+/etc/init.d/cowplay enable
+
+[ ! -x /etc/init.d/cowplay-restore ] || /etc/init.d/cowplay-restore enable

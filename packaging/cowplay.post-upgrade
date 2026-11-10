@@ -1,0 +1,10 @@
+#!/bin/sh
+# Offline image assembly must not operate the build host's services.
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+set -eu
+if [ -f /var/run/cowplay-upgrade-running ]; then
+    rm -f /var/run/cowplay-upgrade-running
+    /etc/init.d/cowplay start
+fi
+
+[ ! -x /etc/init.d/cowplay-restore ] || /etc/init.d/cowplay-restore enable

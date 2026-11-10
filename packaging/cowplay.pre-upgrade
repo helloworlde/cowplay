@@ -1,0 +1,23 @@
+#!/bin/sh
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+set -eu
+marker=/var/run/cowplay-upgrade-running
+rm -f "$marker"
+[ -x /etc/init.d/cowplay ] || exit 0
+/etc/init.d/cowplay running || exit 0
+pid=$(ubus call service list '{"name":"cowplay"}' | jsonfilter -e '@.cowplay.instances.*.pid')
+# procd stop is asynchronous. Only resume after the old process and HCI are gone.
+/etc/init.d/cowplay stop || { echo 'CowPlay stop failed; upgrade will leave it stopped. Check the service before starting it.' >&2; exit 0; }
+case "$pid" in ''|*[!0-9]*) echo 'Cannot identify old CowPlay PID; automatic restart skipped.' >&2; exit 0;; esac
+[ "$pid" -gt 1 ] || exit 0
+n=0
+while kill -0 "$pid" 2>/dev/null || [ -e /sys/class/bluetooth/hci0 ]; do
+    if [ "$n" -ge 20 ]; then
+        # apk may continue unpacking after script failure. Do not create the post-upgrade marker.
+        echo 'CowPlay shutdown did not complete in 20s; automatic restart skipped. Check the service and run /etc/init.d/cowplay start manually.' >&2
+        exit 0
+    fi
+    sleep 1
+    n=$((n+1))
+done
+touch "$marker"

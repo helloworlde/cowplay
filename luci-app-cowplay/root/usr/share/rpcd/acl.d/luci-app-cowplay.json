@@ -1,0 +1,13 @@
+{
+  "luci-app-cowplay": {
+    "description": "Manage CowPlay receiver; read system network settings",
+    "read": {
+      "ubus": {"cowplay": ["status", "diag", "phones", "screens", "logs", "timeline", "proc", "token", "cert", "config_export", "service_info", "network_check", "network_status", "update_status"], "rc": ["list"]},
+      "uci": ["cowplay", "wireless", "network"]
+    },
+    "write": {
+      "ubus": {"cowplay": ["cmd", "client_remove", "token_reset", "reload", "selftest", "bundle", "ddns_sync", "ddns_token", "cert_upload", "mfi_upload", "cert_rollback", "cert_renew", "config_import", "factory_reset", "service", "network_prepare", "network_commit", "network_confirm", "network_cancel", "network_recover", "update_check", "update_apply", "update_prepare", "update_acknowledge"]},
+      "uci": ["cowplay"]
+    }
+  }
+}

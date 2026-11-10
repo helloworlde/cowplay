@@ -1,0 +1,13 @@
+/etc/config/cowplay
+/etc/cowplay/state/
+/etc/cowplay/releases.json
+/etc/cowplay/release-key.pem
+/etc/cowplay/firmware-restore/
+/lib/upgrade/keep.d/cowplay
+/lib/upgrade/cowplay.sh
+/etc/init.d/cowplay-restore
+/usr/libexec/cowplay-restore
+/etc/rc.d/S94cowplay-restore
+/etc/rc.d/K10cowplay-restore
+/etc/rc.d/S95cowplay
+/etc/rc.d/K10cowplay

@@ -1,0 +1,22 @@
+{
+  "openwrt-dashplay": {
+    "commit": "db6dbd2e0d56159e2548ac6100f8788e793c43d8",
+    "url": "https://github.com/yizhixiaoheigou/openwrt-dashplay.git",
+    "license": "GPL-3.0; see retained LICENSE"
+  },
+  "playport": {
+    "commit": "9a0882dd0ffe48e467b59d58b12d81391df55ade",
+    "url": "https://github.com/youcci/playport.git",
+    "license": "GPL-3.0; see retained LICENSE"
+  },
+  "DashPlay": {
+    "commit": "15daeec8201fcce6f9642e6dd5e13939ba4116c1",
+    "url": "https://github.com/yizhixiaoheigou/DashPlay.git",
+    "license": "GPL-3.0; see retained LICENSE"
+  },
+  "DiPlay": {
+    "commit": "615b32ce0b40cd0b99ce94ba23a512001553684f",
+    "url": "https://github.com/shihabal3amri/DiPlay.git",
+    "license": "GPL-3.0; see retained LICENSE"
+  }
+}

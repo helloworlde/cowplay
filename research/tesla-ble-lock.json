@@ -1,0 +1,23 @@
+{
+  "name": "Tesla vehicle-command",
+  "url": "https://github.com/teslamotors/vehicle-command",
+  "commit": "0a582da430c4aca6d397fb6cbed5b4d6bb380125",
+  "license": "Apache-2.0",
+  "scope": "Read-only SessionInfo, AES-GCM GetState charge and TPMS, physical Vehicle Monitor enrollment; no vehicle control commands",
+  "files": {
+    "pkg/protocol/protobuf/universal_message.proto": "110ac4372e3ebdfe94191de857832302d75717fc105820b9f391dbc68e31979f",
+    "pkg/protocol/protobuf/signatures.proto": "f97c4427b954b0169f043116a21211d7b80b67caa03360d7c0deb7c31abbd73d",
+    "pkg/protocol/protobuf/car_server.proto": "c4c7815da826bb7b6139b5bc19ebecf927e216b44ed3cdee1e2a5b9923ca2dcb",
+    "pkg/protocol/protobuf/vehicle.proto": "dd9d05478495af3fa4810e57c80c4236dbe8e45ba3e051d8716f1a3fd3fad9a8",
+    "internal/authentication/native.go": "c68667b7b82aa7bead4e3f3a664e1978fca922c0d13a60aea30c1101b2efdbe0",
+    "internal/authentication/metadata.go": "fb7cc165316c303d049c0aa42c50870fb004604ecbe49374bc2c32bfd5468e99",
+    "internal/authentication/peer.go": "ee26b5f6c533667507d5574eed76e7016fe7ddd29176228fcd95765c1b5dfc95",
+    "internal/authentication/signer.go": "566f2878302d8bbe5eed9f10268018d452fea99c028b5a306b15e339a27c10fd",
+    "internal/authentication/protocol_doc_test.go": "43bbf33387a0873e26e7a395b3aa6c1d967e4ad44976eb199a4823d625186763",
+    "pkg/protocol/protobuf/vcsec.proto": "3825cd6a149880ef3d833e928c5efced93e62a98a788773cfc5a51bb7feaf323",
+    "pkg/protocol/protobuf/keys.proto": "1628c14e1779cd6cf6a87dcceb79f4f7152ec5067d402fbc4990c45b78241b80",
+    "pkg/vehicle/security.go": "b54ecd6f8a5297bdcb4e21dfbf6a398c13395e1fd05b46b07358cc9c1af69f05",
+    "pkg/protocol/error.go": "aa1f5e5ca4d2b89dc8b6bc42c850ea14f04b7c257f08b467cc49611abb23b420",
+    "pkg/connector/ble/ble.go": "f3aaf96f9e83c50d235d722e81e92a479f01d46244d081bf172d086613b07fbc"
+  }
+}

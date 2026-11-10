@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark"><title>CowPlay · 车机</title>  <script type="module" crossorigin src="/assets/car-Dy68cu3e.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/confirmation-C5R23N6t.js">
+  <link rel="modulepreload" crossorigin href="/assets/diagnostics-CD-4Gc7y.js">
+  <link rel="stylesheet" crossorigin href="/assets/confirmation-zlPBGiSC.css">
+  <link rel="stylesheet" crossorigin href="/assets/diagnostics-BW9mAlCS.css">
+  <link rel="stylesheet" crossorigin href="/assets/car-DAuHpjAH.css">
+</head>
+<body data-view="connect" data-side="left">
+<div id="app">
+
+<section id="v-connect" class="view" aria-label="连接">
+  <header class="c-head">
+    <div class="c-brand"><span class="app-icon"><img src="/assets/cowplay-icon-CLxXLuY4.png" alt=""></span><span class="brand">CowPlay</span></div>
+    <button type="button" id="c-settings" class="capsule">设置</button>
+  </header>
+  <main class="c-main">
+    <div id="pipe" class="pipe" aria-label="连接链路"></div>
+    <section class="hero">
+      <span id="c-eyebrow" class="eyebrow"></span>
+      <h1 id="c-title"></h1>
+      <p id="c-lead" class="lead"></p>
+      <div id="c-body" style="display:contents"></div>
+    </section>
+  </main>
+  <footer class="c-foot"><span id="c-foot"></span><span>管理页 · OpenWrt › 服务 › CowPlay</span></footer>
+  <div id="token-layer" class="token-layer" hidden>
+    <section class="token-dialog" role="dialog" aria-label="输入访问令牌">
+      <div class="token-head"><h2>输入访问令牌</h2><p id="token-msg">这台车机还没被授权。输一次就会记住；令牌可在手机“设置”里查看。</p></div>
+      <div id="digits" class="digits" aria-live="polite"></div>
+      <div id="keys" class="keys"></div>
+    </section>
+  </div>
+</section>
+
+<section id="v-session" class="view" aria-label="投屏">
+  <nav class="rail" aria-label="控制栏">
+    <button type="button" id="r-sheet" class="cell" aria-pressed="false" aria-label="控制中心"><span class="circ" data-svg="control"></span><span class="cell-label">控制</span></button>
+    <button type="button" id="r-phones" class="cell" aria-label="添加或管理 iPhone"><span class="circ" data-svg="phone"></span><span class="cell-label">iPhone</span></button>
+    <button type="button" id="r-full" class="cell" aria-label="全屏"><span class="circ" data-svg="full"></span><span class="cell-label">全屏</span></button>
+    <button type="button" id="r-re" class="cell" aria-label="重新连接 CarPlay"><span class="circ" data-svg="reconnect"></span><span class="cell-label">重连</span></button>
+    <span class="rail-grow"></span>
+    <button type="button" id="r-home" class="cell" aria-label="返回 CarPlay 桌面" disabled><span class="circ" data-svg="home"></span><span class="cell-label">桌面</span></button>
+  </nav>
+  <div id="region" class="region">
+    <div class="video"><canvas id="freeze" aria-hidden="true" hidden></canvas><canvas id="screen" width="800" height="480" tabindex="0" aria-label="CarPlay 画面与触控区域"></canvas></div>
+    <div id="cover" class="cover"><strong>CarPlay</strong><span id="cover-text"></span></div>
+    <section id="stats" class="stats" aria-label="调试信息" hidden><button type="button" id="stats-close" class="stats-close" aria-label="关闭调试信息">[X]</button><div id="stats-rows"></div></section>
+    <button type="button" id="handle" class="handle" aria-label="显示控制栏" hidden><span id="h-dot" class="sdot"></span><span id="h-chev" data-svg="chev-right"></span></button>
+    <section id="stall" class="stall" role="status" hidden>
+      <div class="stall-head"><i></i><span id="stall-title" class="stall-title">画面停住了，正在自动恢复</span></div>
+      <div class="stall-meta"><span id="stall-cause"></span><span id="stall-time"></span></div>
+      <span class="stall-bar"><i id="stall-bar"></i></span>
+      <div class="stall-btns"><button type="button" id="stall-re" class="b-blue">立即重连</button><button type="button" id="stall-video" class="b-gray">只重启视频</button></div>
+    </section>
+    <section id="sheet" class="sheet" aria-label="控制中心" hidden>
+      <div class="sheet-head"><b>控制</b><span class="note">画质与通话变更会重连</span></div>
+      <div id="sheet-scroll" class="sheet-scroll">
+      <div id="sheet-toggles" class="tgroup"></div>
+      <div id="sheet-input" class="input-actions" aria-label="CarPlay 控制"></div>
+      <div id="sheet-audio"></div>
+      <div class="sec-block"><div class="sec-head"><span>iPhone</span><a href="#settings/phones" id="sheet-manage">添加 / 管理</a></div><div id="sheet-phones" class="phone-cards" role="radiogroup" aria-label="切换 iPhone"></div></div>
+      <div class="sec-block"><div class="sec-head"><span>画面</span><span id="sheet-live" class="muted" role="status"></span></div><div id="sheet-quality"></div></div>
+      </div>
+      <div class="sheet-btns"><a href="#settings" class="g-btn" id="sheet-all">全部设置</a><button type="button" id="sheet-stop" class="g-btn stop-btn">断开 CarPlay</button></div>
+      <div id="sheet-admin" class="management-entry"></div>
+      <button type="button" id="sheet-done" class="done-btn">完成</button>
+    </section>
+  </div>
+</section>
+
+<section id="v-settings" class="view" aria-label="设置">
+  <nav class="s-side" aria-label="设置分组">
+    <div id="s-title" class="s-title">CowPlay 设置</div>
+    <div id="s-tabs" class="s-tabs"></div>
+    <span class="s-grow"></span>
+    <div id="s-admin" class="s-note management-entry"></div>
+    <button type="button" id="s-back" class="s-back">返回 CarPlay</button>
+  </nav>
+  <main id="s-pane" class="s-pane"></main>
+</section>
+
+</div>
+</body></html>
