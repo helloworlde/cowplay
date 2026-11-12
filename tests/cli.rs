@@ -1,6 +1,25 @@
 use std::{fs, process::Command, time::SystemTime};
 
 #[test]
+fn configured_probe_reports_selected_adapter_without_taking_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config: serde_json::Value = serde_json::from_str(include_str!("../packaging/config.linux.example.json")).unwrap();
+    config["bluetooth"]["adapter"] = serde_json::json!(7);
+    config["host"] = serde_json::json!("openwrt");
+    let state = dir.path().join("untouched-state");
+    config["state_dir"] = serde_json::json!(state);
+    let path = dir.path().join("config.json");
+    fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_cowplay")).arg("probe").arg(path).output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let output = String::from_utf8(result.stdout).unwrap();
+    assert!(output.contains("bluetooth_backend=system\nadapter=hci7\n"));
+    assert!(output.contains("host_management=openwrt\n"));
+    assert!(!output.contains("mu300_bt_init=") && !output.contains("hci0="));
+    assert!(!state.exists());
+}
+
+#[test]
 fn image_command_rejects_non_elf_payload() {
     let nonce = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
