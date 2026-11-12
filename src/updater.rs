@@ -133,7 +133,15 @@ fn load(p: &Paths, id: &str) -> Result<Job> {
     serde_json::from_slice(&read(&p.job(id)?.join("job.json"), MAX_JSON)?)
         .map_err(|_| "更新任务记录损坏".into())
 }
-fn lock(path: &Path) -> Result<fs::File> {
+struct LockGuard(fs::File);
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        // A concurrent fork may retain this open file description until exec.
+        // End our operation's lock now instead of waiting for every copy to close.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN); }
+    }
+}
+fn lock(path: &Path) -> Result<LockGuard> {
     let f = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -145,7 +153,7 @@ fn lock(path: &Path) -> Result<fs::File> {
     if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err("另一更新或端口任务正在执行".into());
     }
-    Ok(f)
+    Ok(LockGuard(f))
 }
 fn repository(s: &str) -> bool {
     let parts: Vec<_> = s.split('/').collect();
@@ -1020,7 +1028,7 @@ fn spawn(p: &Paths, j: &Job) -> Result<()> {
         .map(|_| ())
         .map_err(|_| "无法启动独立更新任务".into())
 }
-fn network_lock(p: &Paths) -> Result<fs::File> {
+fn network_lock(p: &Paths) -> Result<LockGuard> {
     let dir = p.at("var/run/cowplay-network");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let guard = lock(&dir.join("lock"))?;
@@ -1449,6 +1457,23 @@ esac
         let mut mixed = pair("0.3.14-r34"); mixed.insert("luci-app-cowplay".into(), "0.0.1-r0".into());
         assert!(valid(&m, &mixed).is_err()); mixed.remove("luci-app-cowplay"); assert!(valid(&m, &mixed).is_err());
         m.upgrade_from.clear(); assert!(valid(&m, &pair("0.3.14-r34")).is_err());
+    }
+    #[test]
+    fn lock_release_does_not_wait_for_inherited_descriptors() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("lock");
+        let guard = lock(&path).unwrap();
+        // dup and fork share the same open file description and flock ownership.
+        let inherited = guard.0.try_clone().unwrap();
+        assert!(lock(&path).is_err(), "a live operation must remain exclusive");
+        drop(guard);
+        let next = lock(&path).expect("a finished operation must release its lock before child exec/exit");
+        assert_eq!(unsafe { libc::flock(inherited.as_raw_fd(), libc::LOCK_UN) }, 0);
+        assert!(lock(&path).is_err(), "unlocking an old child descriptor must not release the new owner");
+        drop(inherited);
+        assert!(lock(&path).is_err(), "an old child descriptor must not release the new owner");
+        drop(next);
+        assert!(lock(&path).is_ok());
     }
     #[test]
     fn bootstrap_is_idempotent_and_never_replaces_existing_trust() {
