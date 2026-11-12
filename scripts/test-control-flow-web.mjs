@@ -91,6 +91,46 @@ await scenario('carplay-navigation',async({b,fixture,click,controls})=>{
   await b.wait(()=>b.evaluate("['r-siri','r-back','r-home'].every(id=>document.getElementById(id).disabled)"),'phone shortcuts are unavailable while the picture is not ready');
 });
 
+await scenario('dismiss-controls-from-picture',async({b,fixture,click,frame})=>{
+  const touchReports=async()=>(await fixture({})).controlMessages.filter(m=>m.type==='touch'&&m.contacts.length>0);
+  for(const side of ['left','right'])for(const [w,h] of [[1280,720],[800,480],[390,844]]){
+    await fixture({prefsPatch:{rail_side:side}});
+    await b.wait(()=>b.evaluate(`document.body.dataset.side==='${side}'`),'control rail side');
+    await b.viewport(w,h);await frame();
+    for(const touch of [false,true]){
+      await b.call('Emulation.setTouchEmulationEnabled',{enabled:touch,maxTouchPoints:2});
+      await click('#r-sheet');
+      await click('#sheet-playback-group > summary');
+      assert.equal(await b.evaluate("document.querySelector('#sheet').hidden"),false,'interacting inside the menu keeps it open');
+      const at=await b.evaluate(`(()=>{const r=document.querySelector('.video').getBoundingClientRect();return{x:r.left+r.width*${side==='left'?.85:.15},y:r.top+r.height*.5}})()`);
+      assert.equal(await b.evaluate(`!!document.elementFromPoint(${at.x},${at.y})?.closest('.video')`),true,'dismissal point reaches the picture outside the menu');
+      const before=(await touchReports()).length;
+      const tap=async(point=at)=>{
+        if(touch){
+          await b.call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...point}]});
+          await b.call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        }else{
+          await b.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});
+          await b.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});
+        }
+        await frame();
+      };
+      await tap();
+      assert.deepEqual(await b.evaluate("[document.querySelector('#sheet').hidden,document.querySelector('#r-sheet').getAttribute('aria-pressed'),document.querySelector('#screen').inert]"),[true,'false',false],'clicking outside closes the menu and restores picture input');
+      assert.equal((await touchReports()).length,before,'the dismissal tap must not operate CarPlay');
+      if(side==='left'&&!touch)await b.shot(`controls-dismissed-${w}`);
+      // Compact layouts expand the picture again when the menu closes.
+      const nextAt=await b.evaluate("(()=>{const r=document.querySelector('#screen').getBoundingClientRect();return{x:r.left+r.width*.85,y:r.top+r.height*.5}})()");
+      await tap(nextAt);
+      await b.wait(async()=>{const m=(await touchReports()).slice(before);return m.some(x=>x.contacts.some(c=>c.down))&&m.some(x=>x.contacts.some(c=>!c.down))},'the next picture tap reaches CarPlay');
+      await click('#r-sheet');await click('#r-sheet');
+      assert.equal(await b.evaluate("document.querySelector('#sheet').hidden"),true,'the control button still toggles the menu closed');
+    }
+  }
+  assert.deepEqual(await b.evaluate("[location.pathname,document.title,!!document.querySelector('vite-error-overlay')]"),['/car','CowPlay · 车机',false]);
+  assert.deepEqual(b.warnings,[]);
+});
+
 await scenario('grouped-controls',async({b,fixture,click,frame})=>{
   assert.deepEqual(await b.evaluate("[location.pathname,document.title,!!document.querySelector('vite-error-overlay')]"),['/car','CowPlay · 车机',false]);
   await click('#r-sheet');
