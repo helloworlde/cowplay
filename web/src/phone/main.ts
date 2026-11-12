@@ -1,7 +1,7 @@
 import {receiverName} from '../shared/receiver';
 import {confirmAction,cancelConfirmation,preferenceChanges,preferencePrompt,commandPrompt,stateContext} from '../shared/confirmation';
 import {$, clear, h, icon} from '../shared/dom';
-import {ApiError, admit, api, authStatus, setupAccess, download, getDiag, getState, getStats, pairingAdapterName, pairStage, recentLinkError, runSegments, saveError, sendCmd, setPrefs, targetPhone, type PairStage, type ScreenPrefs} from '../shared/api';
+import {ApiError, admit, api, authStatus, setupAccess, setupOpenAccess, download, getDiag, getState, getStats, pairingAdapterName, pairStage, recentLinkError, runSegments, saveError, sendCmd, setPrefs, targetPhone, type PairStage, type ScreenPrefs} from '../shared/api';
 import {mmss} from '../shared/fmt';
 import {browserName, toast} from '../car/ui';
 import {NearbyPhones, PairingConfirmation} from '../shared/pairing';
@@ -174,7 +174,7 @@ const actions: Actions = {
     if(app.tokenBusy||!app.authorized||app.page!=='settings')return;
     const request=++tokenRequest,access=authEpoch,sourceUI=uiEpoch,owner=app.state?.me.id;app.tokenBusy=true;render();
     const current=()=>request===tokenRequest&&access===authEpoch&&sourceUI===uiEpoch&&app.authorized&&app.state?.me.id===owner&&app.page==='settings'&&document.visibilityState==='visible';
-    try {const r=await api<{token:string}>('/api/token');if(current()){app.token=r.token;app.showToken=true;}}
+    try {const r=await api<{token:string;mode?:string}>('/api/token');if(current()){app.token=r.mode==='open'?'未启用访问码':r.token;app.showToken=true;}}
     catch(e){if(current())app.error=(e as Error).message;}
     finally{if(request===tokenRequest){app.tokenBusy=false;render();}}
   },
@@ -316,9 +316,40 @@ function authForm(message: string, setup = false): void {
   input.setAttribute('aria-label', setup?'设置访问码':'访问码');
   const submit = h('button', {type: 'submit', class: 'primary'}, setup?'保存并进入 CowPlay':'连接 CowPlay');
   const form = h('form', {class: 'auth'}, h('label',{},setup?'设置六位访问码':'访问码',input), ...(setup?[h('label',{},'再输入一次',confirm)]:[]), submit);
-  form.onsubmit = async e => { e.preventDefault(); submit.disabled = true; try { if(setup) await setupAccess('phone',input.value,confirm.value,browserName()); else await admit('phone', {token: input.value, name: browserName()}); if(!(await authStatus()).authorized)throw Error('浏览器未保存授权，请允许此站点的 Cookie 后重试'); await authorized(); } catch (err) { msg.textContent = (err as Error).message; input.value = '';confirm.value='';if(setup){try{if(!(await authStatus()).setup_required)authForm((err as Error).message);}catch{}} } finally { submit.disabled = false; } };
+  let busy = false, skip: HTMLButtonElement | null = null;
+  const setBusy = (value: boolean) => { busy = value; submit.disabled = input.disabled = confirm.disabled = value; if (skip) skip.disabled = value; };
+  if (setup) {
+    skip = h('button', {type:'button', id:'access-skip'}, '不设置访问码');
+    skip.onclick = async () => {
+      if (busy) return; setBusy(true);
+      try { if (await confirmAction({title:'不设置访问码？',description:'能打开此地址的设备可进入投屏和手机管理。以后可在管理页开启访问码。',confirm:'不设置并进入'})) await enterWithoutCode(true); }
+      finally { setBusy(false); }
+    };
+    form.append(skip);
+  }
+  form.onsubmit = async e => { e.preventDefault(); if(busy)return;setBusy(true); try { if(setup) await setupAccess('phone',input.value,confirm.value,browserName()); else await admit('phone', {token: input.value, name: browserName()}); if(!(await authStatus()).authorized)throw Error('浏览器未保存授权，请允许此站点的 Cookie 后重试'); await authorized(); } catch (err) { msg.textContent = (err as Error).message; input.value = '';confirm.value='';try{const st=await authStatus();if(!st.required&&!st.setup_required)openAccessForm((err as Error).message);else if(setup&&!st.setup_required)authForm((err as Error).message);}catch{} } finally { setBusy(false); } };
   clear($('content'), h('h1', {}, 'CowPlay'), h('p', {class: 'lead'}, '连接、遥控与诊断'), msg, form, foot(setup?'此码保存在这台 CowPlay 上，供每个新设备首次访问。以后可通过受保护的管理入口修改或重置。':'请输入这台 CowPlay 首次设置的访问码。忘记时可由管理员修改或重置。'));
   document.documentElement.dataset.ready = 'true';
+}
+function openAccessForm(message: string): void {
+  $('tabs').hidden = true;
+  const retry = h('button', {type:'button',class:'primary',id:'access-retry'}, '重新进入');
+  retry.onclick = async () => { retry.disabled = true; try { await enterWithoutCode(false); } finally { retry.disabled = false; } };
+  clear($('content'), h('h1', {}, 'CowPlay'), h('p', {role:'status'}, message), retry);
+  document.documentElement.dataset.ready = 'true';
+}
+async function enterWithoutCode(setup: boolean): Promise<void> {
+  try {
+    if (setup) await setupOpenAccess('phone', browserName());
+    else await admit('phone', {name: browserName()});
+    if (!(await authStatus()).authorized) throw Error('浏览器未保存授权，请允许此站点的 Cookie 后点击重新进入');
+    await authorized();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : '暂时无法进入，请重试';
+    const status = await authStatus().catch(() => null);
+    if (status?.setup_required || status?.required) authForm(message, !!status.setup_required);
+    else openAccessForm(message);
+  }
 }
 async function authorized(): Promise<void> { accessChanged();app.authorized = true; clearInterval(pollTimer); pollTimer = window.setInterval(() => void poll(), 2000); route(); await poll(); }
 async function boot(): Promise<void> {
@@ -326,7 +357,8 @@ async function boot(): Promise<void> {
   try {
     const st = await authStatus();
     if (st.authorized) { await authorized(); return; }
-    if(st.setup_required){authForm('首次使用：为这台 CowPlay 设置六位数字访问码。',true);return;}
+    if(st.setup_required){authForm('首次使用：可设置六位数字访问码，也可选择不设置。',true);return;}
+    if(!st.required){await enterWithoutCode(false);return;}
     authForm(st.locked_s ? `错误次数太多，${Math.ceil(st.locked_s / 60)} 分钟后再试` : '输入六位访问码，此浏览器只需验证一次。');
   } catch (e) { authForm((e as Error).message); }
 }

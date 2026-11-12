@@ -106,7 +106,7 @@ async fn call(
         "tesla_status" => crate::ctl::dispatch(&m.admin, &method, &args).await,
         #[cfg(feature = "tesla")]
         "tesla_configure" | "tesla_connect" | "tesla_disconnect" | "tesla_pair" | "tesla_cancel" | "tesla_climate_pair" | "tesla_climate_query" | "tesla_climate_command" | "tesla_ultra_control" => crate::ctl::dispatch(&m.admin, &method, &args).await,
-        "status" | "diag" | "screens" | "client_remove" | "token" | "token_set" | "cert" | "cert_upload"
+        "status" | "diag" | "screens" | "client_remove" | "token" | "token_set" | "token_disable" | "cert" | "cert_upload"
         | "mfi_upload" | "logs" => crate::ctl::dispatch(&m.admin, &method, &args).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
@@ -216,6 +216,11 @@ mod tests {
         assert_eq!(r.status(),StatusCode::FORBIDDEN);
         let r=client.post(&change_url).bearer_auth(&token).header("Origin","https://test.invalid").header("Content-Type","application/json").body(change.to_string()).send().await.unwrap();
         assert_eq!(r.status(),StatusCode::OK);assert_eq!(hub.clients.token(),"345678");assert!(hub.clients.get(&browser.id).is_some());
+        let disable_url=format!("http://{addr}/api/manage/token_disable");
+        let r=client.post(&disable_url).header("Origin","https://test.invalid").header("Cookie",format!("{}={}",f50_server::clients::COOKIE,browser.id)).body("{}").send().await.unwrap();
+        assert_eq!(r.status(),StatusCode::UNAUTHORIZED);
+        let r=client.post(&disable_url).bearer_auth(&token).header("Origin","https://other.invalid").body("{}").send().await.unwrap();assert_eq!(r.status(),StatusCode::FORBIDDEN);
+        let r=client.post(&disable_url).bearer_auth(&token).header("Origin","https://test.invalid").body("{}").send().await.unwrap();assert_eq!(r.status(),StatusCode::OK);assert!(!hub.clients.policy().required);
         #[cfg(feature = "tesla")]
         {
             for method in ["tesla_configure", "tesla_connect", "tesla_disconnect", "tesla_pair", "tesla_cancel", "tesla_climate_pair", "tesla_climate_query", "tesla_climate_command", "tesla_ultra_control"] {

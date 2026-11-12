@@ -5,7 +5,7 @@ import {InputController} from '../input';
 import {parseWireMessage} from '../protocol';
 import {BUILD_ID, PROTOCOL} from '../build';
 import {$, h} from '../shared/dom';
-import {ApiError, admit, api, authStatus, setupAccess, getDiag, getState, getStats, linkBusy, pairingActive, pairingCode, pairingFinishing, recentLinkError, runSegments, saveError, targetPhone, sendCmd, setPrefs as postPrefs, type ScreenPrefs, type State} from '../shared/api';
+import {ApiError, admit, api, authStatus, setupAccess, setupOpenAccess, getDiag, getState, getStats, linkBusy, pairingActive, pairingCode, pairingFinishing, recentLinkError, runSegments, saveError, targetPhone, sendCmd, setPrefs as postPrefs, type ScreenPrefs, type State} from '../shared/api';
 import {NearbyPhones, PairingConfirmation} from '../shared/pairing';
 import {FrameProgress} from '../shared/frame-progress';
 import {AudioControls} from './audio-controls';
@@ -428,16 +428,28 @@ const connectActions: ConnectActions = {
     render();
   },
   nearby: nearbyPhones,
+  async openAccess() {
+    try {
+      if (app.setupRequired) await setupOpenAccess('screen', browserName());
+      else await admit('screen', {name: browserName()});
+      const st = await authStatus(); app.setupRequired = !!st.setup_required; app.accessOpen = !st.required && !app.setupRequired;
+      if (!st.authorized) { render(); return '浏览器未保存授权，请允许此站点的 Cookie 后点击重新进入'; }
+      await authorized(); return null;
+    } catch (e) {
+      try { const st = await authStatus(); app.setupRequired = !!st.setup_required; app.accessOpen = !st.required && !app.setupRequired; } catch {}
+      render(); return e instanceof Error ? e.message : '暂时无法进入，请重试';
+    }
+  },
   async token(code: string, confirmation?: string) {
     try {
       if (app.setupRequired) await setupAccess('screen', code, confirmation ?? '', browserName());
       else await admit('screen', {token: code, name: browserName()});
       // Verify the HttpOnly cookie on a second request, not just the token ACK.
-      const status=await authStatus();app.setupRequired=!!status.setup_required;
+      const status=await authStatus();app.setupRequired=!!status.setup_required;app.accessOpen=!status.required&&!app.setupRequired;
       if (!status.authorized) return '浏览器未保存授权，请允许此站点的 Cookie 后重试';
       await authorized(); return null;
     }
-    catch (e) { if(app.setupRequired){try{app.setupRequired=!!(await authStatus()).setup_required;}catch{}} return e instanceof ApiError ? e.message : '暂时无法验证，请稍后再试'; }
+    catch (e) { try{const status=await authStatus();app.setupRequired=!!status.setup_required;app.accessOpen=!status.required&&!app.setupRequired;}catch{} render();return e instanceof ApiError ? e.message : '暂时无法验证，请稍后再试'; }
   },
 };
 
@@ -682,6 +694,7 @@ async function checkAuthorization(owner:number):Promise<boolean> {
     const status = await authStatus();
     if (owner !== authorization || !app.authorized) return false;
     if (status.authorized) return true;
+    app.setupRequired = !!status.setup_required; app.accessOpen = !status.required && !app.setupRequired;
     invalidate('这块屏幕的授权已失效'); closeSocket();
     app.authorized = false; authorizationChanged(); app.everRendered = false;
     clearTimeout(retryTimer); setView('connect'); render();
@@ -704,7 +717,9 @@ async function boot(): Promise<void> {
     const st = await authStatus();
     if (st.authorized) { await authorized(); return; }
     app.setupRequired = !!st.setup_required;
-    $('token-msg').textContent = app.setupRequired ? '为这台 CowPlay 设置六位数字访问码。其他新设备也使用这个码。' : '输入首次设置的六位访问码。此浏览器验证一次后会记住授权。';
+    app.accessOpen = !st.required && !app.setupRequired;
+    if (app.accessOpen) { const error = await connectActions.openAccess(); if (error) { $('token-msg').textContent = error; render(); } return; }
+    $('token-msg').textContent = app.setupRequired ? '可设置六位数字访问码，也可选择不设置。设置后，其他新设备也使用这个码。' : '输入首次设置的六位访问码。此浏览器验证一次后会记住授权。';
     if (st.locked_s) { $('token-msg').textContent = `错误次数太多，${Math.ceil(st.locked_s / 60)} 分钟后再试`; $('token-msg').className = 'err'; }
   } catch { $('token-msg').textContent = '暂时连不上 CowPlay，稍后自动重试'; setTimeout(() => void boot(), 5000); }
   render();

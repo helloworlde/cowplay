@@ -107,6 +107,12 @@ try {
         await b.wait(() => b.evaluate("document.querySelector('[data-page=devices] code').textContent==='234567'"), 'management sees saved code');
         await click('重置令牌'); await luciConfirmation(b);
         await b.wait(() => b.evaluate("document.querySelector('[data-page=devices] code').textContent==='654321'"), 'management resets code');
+        await click('不使用访问码'); await luciConfirmation(b, 'cancel');
+        assert.equal((await calls()).filter(c=>c.method==='token_disable').length,0);
+        await click('不使用访问码'); await luciConfirmation(b);
+        await b.wait(()=>b.evaluate("document.querySelector('[data-page=devices] code').textContent==='未启用访问码'"),'management disables code');
+        await click('显示令牌');
+        await b.wait(()=>b.evaluate("document.querySelector('[data-page=devices] code').textContent==='未启用访问码'"),'open mode remains distinct from pending setup');
     });
     await runningCase('hiding a pending token and concurrent reset/show replies respect their own display snapshots', async () => {
         await open('devices');

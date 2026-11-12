@@ -46,10 +46,11 @@ async function dashboard(): Promise<void> {
     feedback.textContent = '画面上限已保存并应用。';
   });
   const tokenValue = h('output', {id: 'screen-token'}, '••••••');
-  const showToken = action('显示投屏令牌', async () => { tokenValue.textContent = String((await api('token')).token ?? '—'); });
+  const showToken = action('显示访问设置', async () => { const r = await api('token'); tokenValue.textContent = r.mode === 'open' ? '未启用访问码' : r.mode === 'setup' ? '等待首次选择' : String(r.token || '暂时不可用'); });
   const accessCode=h('input',{type:'password',inputmode:'numeric',maxlength:6,autocomplete:'new-password','aria-label':'新访问码'});
-  const changeCode=action('修改访问码',async()=>{if(!/^\d{6}$/.test(accessCode.value))throw Error('请输入六位数字访问码');if(!await confirmAction({title:'修改访问码？',description:'旧码不再用于新增授权，已授权浏览器保留。',confirm:'修改'}))return;await api('token_set',{token:accessCode.value});accessCode.value='';tokenValue.textContent='已修改';});
-  const resetCode=action('重置访问码',async()=>{if(!await confirmAction({title:'重置访问码？',description:'将生成新的六位访问码，已授权浏览器保留。',confirm:'重置'}))return;const r=await api('token',{action:'reset'});tokenValue.textContent=r.token;});
+  const changeCode=action('设置访问码',async()=>{if(!/^\d{6}$/.test(accessCode.value))throw Error('请输入六位数字访问码');if(!await confirmAction({title:'设置访问码？',description:'免码进入的浏览器需验证一次；以前验证过的浏览器保留授权。旧码不再用于新增授权。',confirm:'设置'}))return;await api('token_set',{token:accessCode.value});accessCode.value='';tokenValue.textContent='已设置';});
+  const resetCode=action('重置访问码',async()=>{if(!await confirmAction({title:'重置访问码？',description:'将启用新的六位访问码；免码进入的浏览器需验证一次，以前验证过的浏览器保留授权。',confirm:'重置'}))return;const r=await api('token',{action:'reset'});tokenValue.textContent=r.token;});
+  const disableCode=action('不使用访问码',async()=>{if(!await confirmAction({title:'不使用访问码？',description:'能打开此地址的设备可进入投屏和手机管理。已保存的屏幕设置保留。',confirm:'停用访问码'}))return;await api('token_disable');accessCode.value='';tokenValue.textContent='未启用访问码';});
   const certificate = h('input', {type: 'file', accept: '.pem,.crt', 'aria-label': 'HTTPS 证书链'});
   const key = h('input', {type: 'file', accept: '.pem,.key', 'aria-label': 'HTTPS 私钥'});
   const upload = action('替换 HTTPS 证书', async () => {
@@ -67,7 +68,7 @@ async function dashboard(): Promise<void> {
     tesla.element,
     h('section', {}, h('h2', {}, '连接状态'), h('p', {}, status.verdict?.title ?? status.verdict ?? '状态未知'), h('p', {}, `访问地址：${status.network?.origin ?? '—'}`)),
     h('section', {}, h('h2', {}, '画面上限'), field('分辨率上限', resolution), h('p', {class: 'lead'}, '可填 1080p、2160p 或偶数宽×高，例如 1280x800。'), field('帧率上限', fps), field('自动降低帧率', downgrade), save),
-    h('section', {}, h('h2', {}, '投屏访问'), h('p', {}, '新车机首次打开时输入投屏令牌。'), tokenValue, showToken, field('新访问码',accessCode), changeCode, resetCode),
+    h('section', {}, h('h2', {}, '投屏访问'), h('p', {}, '访问码可选。开启后，新浏览器及免码进入的浏览器需验证一次；不设置时，能打开此地址的设备可直接进入。'), tokenValue, showToken, field('新访问码',accessCode), changeCode, resetCode, disableCode),
     h('section', {}, h('h2', {}, 'HTTPS 证书'), h('p', {class: 'lead'}, status.network?.cert_days == null ? '有效期未知' : `证书剩余 ${status.network.cert_days} 天`), field('证书链 PEM', certificate), field('私钥 PEM', key), upload),
     h('p', {class: 'lead'}, '热点、路由、开机启动和升级由主机系统管理。手机控制台提供配对、重连、屏幕偏好与诊断日志。'));
   tesla.start();

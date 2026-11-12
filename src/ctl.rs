@@ -99,13 +99,17 @@ pub async fn dispatch(a: &Arc<Admin>, method: &str, args: &Value) -> Result<Valu
             a.hub.clients.set_token(arg(args, "token").ok_or("缺少访问码")?).map_err(|e|e.to_string())?;
             json!({"ok":true})
         },
+        "token_disable" => {
+            a.hub.clients.disable_token().map_err(|e| e.to_string())?;
+            json!({"ok":true})
+        },
         "token" => match arg(args, "action").unwrap_or("show") {
             "reset" => {
                 let t = a.hub.clients.reset_token().map_err(|e| e.to_string())?;
                 diag().event("info", "web", "访问令牌已重置");
                 json!({"token": t})
             }
-            _ => json!({"token": a.hub.clients.token()}),
+            _ => a.hub.clients.access_status(),
         },
         "reload" => {
             let before = a.policy();

@@ -43,6 +43,7 @@ export const app = {
   connectingSince: 0,
   lastSearch: 0,
   setupRequired: false,
+  accessOpen: false,
   /** Debug overlay is open (persisted per screen as prefs.debug). */
   fullscreen: false,
   sheet: false,

@@ -1773,6 +1773,22 @@ mod wire_tests {
         new.close(None).await.unwrap(); task.abort();
     }
     #[tokio::test]
+    async fn enabling_code_revokes_open_viewer_until_the_same_browser_verifies() {
+        let (h, _control)=Hub::new("".into(),"https://test.invalid".into());
+        h.simulated.store(true,Ordering::Relaxed);
+        let browser=h.clients.setup(clients::NO_CODE,"screen","test","","").unwrap();
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
+        let app=router(h.clone());let task=tokio::spawn(async move{axum::serve(listener,app).await.unwrap()});
+        let request=||{let mut r=format!("ws://{addr}/ws").into_client_request().unwrap();r.headers_mut().insert("Origin",h.origin().parse().unwrap());r.headers_mut().insert("Cookie",format!("{}={}",clients::COOKIE,browser.id).parse().unwrap());r};
+        let hello=serde_json::json!({"build":build_info::BUILD_ID,"protocol":build_info::PROTOCOL}).to_string();
+        let (mut ws,_)=connect_async(request()).await.unwrap();ws.send(WsMessage::Text(hello.clone().into())).await.unwrap();assert!(ws.next().await.unwrap().unwrap().to_text().unwrap().contains("hello"));
+        h.clients.set_token("234567").unwrap();
+        tokio::time::timeout(Duration::from_secs(2),async{loop{let m=ws.next().await.unwrap().unwrap();if m.to_text().is_ok_and(|t|t.contains("AUTH_REVOKED")){break;}}}).await.expect("open viewer must lose access when a code is enabled");
+        assert!(connect_async(request()).await.is_err());
+        let verified=h.clients.admit_browser(Some("234567"),Some(&browser.id),"screen","","","").unwrap();assert_eq!(verified.id,browser.id);
+        let (mut ws,_)=connect_async(request()).await.unwrap();ws.send(WsMessage::Text(hello.into())).await.unwrap();assert!(ws.next().await.unwrap().unwrap().to_text().unwrap().contains("hello"));ws.close(None).await.unwrap();task.abort();
+    }
+    #[tokio::test]
     async fn user_connect_takes_over_the_screen_and_tells_the_old_one() {
         let (h, _control) = Hub::new("synthetic-token-for-tests-only".into(), "https://test.invalid".into());
         h.simulated.store(true, Ordering::Relaxed);

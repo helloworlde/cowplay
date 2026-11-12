@@ -1,4 +1,5 @@
 import {receiverDevice} from '../shared/receiver';
+import {confirmAction} from '../shared/confirmation';
 // 01 · Connect flow: onboard, add iPhone, pair, connecting, choose, takeover, not found, token, stopped.
 import {$, clear, h} from '../shared/dom';
 import {mmss} from '../shared/fmt';
@@ -21,6 +22,7 @@ export interface ConnectActions {
   /** Leave the add-iPhone scene; closes a window that is still open. */
   cancelAdd(): void;
   token(code: string, confirmation?: string): Promise<string | null>;
+  openAccess(): Promise<string | null>;
   nearby: NearbyPhones;
 }
 
@@ -259,8 +261,11 @@ export function renderConnect(a: ConnectActions): void {
   if (app.authorized && s) body.push(debug.update(s,app.channel));
   clear($('c-body'), ...body);
   $('token-layer').hidden = sc !== 'token';
-  $('token-title').textContent = app.setupRequired ? (firstCode ? '确认访问码' : '首次设置访问码') : '输入访问码';
+  $('token-title').textContent = app.accessOpen ? '进入 CowPlay' : app.setupRequired ? (firstCode ? '确认访问码' : '首次设置访问码') : '输入访问码';
   $('token-reset').hidden = !app.setupRequired;
+  $('token-open').hidden = !app.setupRequired && !app.accessOpen;
+  $('token-open').textContent = app.setupRequired ? '不设置访问码' : '重新进入';
+  $('keys').hidden = $('digits').hidden = app.accessOpen;
 }
 /** The link diagram yields its space before any button would fall below the screen (run after all inserts). */
 export function fitConnect(): void {
@@ -287,11 +292,21 @@ export function setupKeypad(a: ConnectActions): void {
     else if (e.key === 'Backspace') press('⌫', a);
   });
   $('token-reset').onclick = () => { firstCode='';code='';drawDigits();$('token-title').textContent='首次设置访问码';$('token-msg').textContent='请设置六位数字访问码'; };
+  $('token-open').onclick = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      if (app.setupRequired && !await confirmAction({title:'不设置访问码？',description:'能打开此地址的设备可进入投屏和手机管理。以后可在管理页开启访问码。',confirm:'不设置并进入'})) return;
+      const error = await a.openAccess();
+      code = firstCode = ''; drawDigits();
+      if (error) { $('token-msg').textContent = error; $('token-msg').className = 'err'; }
+    } finally { busy = false; }
+  };
   drawDigits();
 }
 function drawDigits(): void { clear($('digits'), ...[0, 1, 2, 3, 4, 5].map(i => h('span', {class: i < code.length ? 'on' : ''}))); }
 async function press(k: string, a: ConnectActions): Promise<void> {
-  if (busy) return;
+  if (busy || app.accessOpen) return;
   if (k === '⌫') code = code.slice(0, -1);
   else if (k && code.length < 6) code += k;
   drawDigits();
@@ -305,7 +320,7 @@ async function press(k: string, a: ConnectActions): Promise<void> {
   drawDigits();
   const msg = $('token-msg');
   if (error) {
-    if(!app.setupRequired){firstCode='';$('token-title').textContent='输入访问码';$('token-reset').hidden=true;}
+    if(!app.setupRequired){firstCode='';$('token-title').textContent=app.accessOpen?'进入 CowPlay':'输入访问码';$('token-reset').hidden=true;}
     msg.textContent = error; msg.className = 'err';
     $('digits').classList.remove('shake'); void $('digits').offsetWidth; $('digits').classList.add('shake');
   } else {

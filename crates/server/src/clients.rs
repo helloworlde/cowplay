@@ -1,6 +1,6 @@
 //! Authorized browsers ("clients"): car screens and phones.
 //!
-//! Every new browser verifies the receiver's six-digit access code. First use sets that code;
+//! First use explicitly chooses a six-digit access code or access without a code;
 //! subsequent changes require protected management access. The client id lives in an HttpOnly
 //! cookie; every screen keeps its own display preferences on the server.
 use crate::settings::write_private;
@@ -19,6 +19,7 @@ const MAX_CLIENTS: usize = 64;
 const MAX_FAILURES: usize = 5;
 const LOCK: Duration = Duration::from_secs(600);
 pub const SETUP_REQUIRED: &str = "setup-required";
+pub const NO_CODE: &str = "no-code";
 
 /// Per-screen preferences. The active screen's values drive the CarPlay session.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -104,11 +105,16 @@ pub struct Client {
     pub last_ms: u64,
     /// None = remembered until removed.
     pub expires_ms: Option<u64>,
+    /// Preserve trust in old records. Open-mode browsers must verify when a code is enabled.
+    #[serde(default = "verified_by_default", skip_serializing_if = "is_true")]
+    code_verified: bool,
     #[serde(default)]
     pub prefs: ScreenPrefs,
     #[serde(default)]
     pub window: Option<Window>,
 }
+fn verified_by_default() -> bool { true }
+fn is_true(value: &bool) -> bool { *value }
 impl Client {
     /// Short public handle (never the cookie value).
     pub fn handle(&self) -> String {
@@ -187,7 +193,7 @@ pub fn cookie_id(headers: &axum::http::HeaderMap) -> Option<String> {
 impl Clients {
     /// In-memory store seeded with `token` when it is a 6-digit number.
     pub fn new(token: &str) -> Self {
-        let token = if valid_token(token) { token.to_owned() } else { String::new() };
+        let token = if valid_token(token) || token == NO_CODE { token.to_owned() } else { String::new() };
         Self {
             inner: Mutex::new(Inner {
                 dir: None,
@@ -215,7 +221,7 @@ impl Clients {
         let mut i = self.inner.lock().unwrap();
         i.available = false;
         let t = std::fs::read_to_string(dir.join("access-token"))?;
-        i.token = if valid_token(t.trim()) { t.trim().to_owned() }
+        i.token = if valid_token(t.trim()) || t.trim() == NO_CODE { t.trim().to_owned() }
             else if t.trim() == SETUP_REQUIRED { String::new() }
             else { return Err(std::io::Error::other("invalid persistent access code")); };
         match std::fs::read(dir.join("clients.json")) {
@@ -242,14 +248,29 @@ impl Clients {
     pub fn setup(&self, token: &str, kind: &str, name: &str, ua: &str, ip: &str) -> Result<Client, &'static str> {
         let mut i = self.inner.lock().unwrap();
         if !i.available || !i.token.is_empty() { return Err("访问码已设置或存储不可用，请刷新后登录"); }
-        if !valid_token(token) || !matches!(kind, "screen" | "phone") { return Err("请设置六位数字访问码"); }
+        if !(valid_token(token) || token == NO_CODE) || !matches!(kind, "screen" | "phone") { return Err("请选择不设访问码或设置六位数字访问码"); }
         save_token(&mut i, token).map_err(|_| "无法确认访问码保存结果，请由管理员检查存储后重启")?;
-        admit(&mut i, kind, name, ua, ip).map_err(|_| "访问码已保存，但浏览器授权未保存；请修复存储后用该码登录")
+        admit(&mut i, None, token != NO_CODE, kind, name, ua, ip).map_err(|_| "访问方式已保存，但浏览器授权未保存；请修复存储后重试")
     }
     /// Only protected management entry points call this method.
     pub fn set_token(&self, token: &str) -> std::io::Result<()> {
         if !valid_token(token) { return Err(std::io::Error::other("访问码必须是六位数字")); }
         save_token(&mut self.inner.lock().unwrap(), token)
+    }
+    /// Protected management only. Absence or corruption of a code never enables this mode.
+    pub fn disable_token(&self) -> std::io::Result<()> {
+        save_token(&mut self.inner.lock().unwrap(), NO_CODE)
+    }
+    pub fn access_status(&self) -> serde_json::Value {
+        let i = self.inner.lock().unwrap();
+        access_status(&i)
+    }
+    /// Check browser trust and read the code in one critical section.
+    pub fn phone_access_status(&self, id: &str) -> Option<serde_json::Value> {
+        let i = self.inner.lock().unwrap();
+        if !i.available || i.token.is_empty() { return None; }
+        i.clients.iter().find(|c| ct_eq(&c.id,id) && c.kind == "phone" && c.expires_ms.is_none_or(|e|e>now_ms()) && (i.token == NO_CODE || c.code_verified))?;
+        Some(access_status(&i))
     }
     pub fn set_policy(&self, policy: Policy, defaults: ScreenPrefs) {
         let mut i = self.inner.lock().unwrap();
@@ -260,7 +281,8 @@ impl Clients {
         i.epoch += 1;
     }
     pub fn policy(&self) -> Policy {
-        self.inner.lock().unwrap().policy
+        let i = self.inner.lock().unwrap();
+        Policy { required: i.token != NO_CODE, ..i.policy }
     }
     pub fn epoch(&self) -> u64 {
         self.inner.lock().unwrap().epoch
@@ -285,6 +307,7 @@ impl Clients {
         if !i.available || i.token.is_empty() { return None; }
         let now = now_ms();
         let pos = i.clients.iter().position(|c| ct_eq(&c.id, id))?;
+        if i.token != NO_CODE && !i.clients[pos].code_verified { return None; }
         if i.clients[pos].expires_ms.is_some_and(|e| e <= now) {
             i.clients.remove(pos);
             i.epoch += 1;
@@ -307,8 +330,14 @@ impl Clients {
     }
     /// Verify a token attempt and admit a new client.
     pub fn admit_token(&self, token: &str, kind: &str, name: &str, ua: &str, ip: &str) -> Result<Client, Denied> {
+        self.admit_browser(Some(token), None, kind, name, ua, ip)
+    }
+    /// Mode selection and admission share the lock with management changes.
+    pub fn admit_browser(&self, token: Option<&str>, existing: Option<&str>, kind: &str, name: &str, ua: &str, ip: &str) -> Result<Client, Denied> {
         let mut i = self.inner.lock().unwrap();
-        if !i.available || i.token.is_empty() { return Err(Denied::Invalid); }
+        if !i.available || i.token.is_empty() || !matches!(kind, "screen" | "phone") { return Err(Denied::Invalid); }
+        if i.token == NO_CODE { return admit(&mut i, existing, false, kind, name, ua, ip).map_err(|_| Denied::Invalid); }
+        let Some(token) = token else { return Err(Denied::Wrong { remaining: MAX_FAILURES }); };
         if let Some(retry_after_s) = lock_left(&mut i) {
             return Err(Denied::Locked { retry_after_s });
         }
@@ -326,7 +355,7 @@ impl Clients {
             return Err(Denied::Wrong { remaining: MAX_FAILURES - i.failures.len() });
         }
         i.failures.clear();
-        admit(&mut i, kind, name, ua, ip).map_err(|_| Denied::Invalid)
+        admit(&mut i, existing, true, kind, name, ua, ip).map_err(|_| Denied::Invalid)
     }
     pub fn set_prefs(&self, id: &str, prefs: ScreenPrefs) -> Result<Client, &'static str> {
         prefs.validate()?;
@@ -372,6 +401,9 @@ impl Clients {
         format!("{COOKIE}={}; Path=/; Max-Age={max_age}; HttpOnly; Secure; SameSite=Strict", client.id)
     }
 }
+fn access_status(i: &Inner) -> serde_json::Value {
+    serde_json::json!({"mode": if !i.available { "unavailable" } else if i.token.is_empty() { "setup" } else if i.token == NO_CODE { "open" } else { "code" }, "token": if valid_token(&i.token) { i.token.as_str() } else { "" }})
+}
 fn save_token(i: &mut Inner, token: &str) -> std::io::Result<()> {
     if !i.available { return Err(std::io::Error::other("access storage unavailable; restart after repair")); }
     if let Some(dir) = &i.dir {
@@ -398,11 +430,19 @@ fn lock_left(i: &mut Inner) -> Option<u64> {
 fn clean(s: &str, max: usize) -> String {
     s.chars().filter(|c| !c.is_control()).take(max).collect()
 }
-fn admit(i: &mut Inner, kind: &str, name: &str, ua: &str, ip: &str) -> std::io::Result<Client> {
+fn admit(i: &mut Inner, existing: Option<&str>, code_verified: bool, kind: &str, name: &str, ua: &str, ip: &str) -> std::io::Result<Client> {
     if !matches!(kind, "screen" | "phone") {
         return Err(std::io::Error::other("kind"));
     }
     let now = now_ms();
+    if let Some(pos) = existing.and_then(|id| i.clients.iter().position(|c| ct_eq(&c.id, id) && c.expires_ms.is_none_or(|e| e > now))) {
+        let before = i.clients[pos].clone();
+        i.clients[pos].code_verified |= code_verified;
+        i.clients[pos].last_ms = now;
+        if let Err(e) = persist(i) { i.clients[pos] = before; i.available = false; return Err(e); }
+        i.epoch += 1;
+        return Ok(i.clients[pos].clone());
+    }
     let client = Client {
         id: hex(&random_bytes::<16>()?),
         kind: kind.into(),
@@ -412,6 +452,7 @@ fn admit(i: &mut Inner, kind: &str, name: &str, ua: &str, ip: &str) -> std::io::
         created_ms: now,
         last_ms: now,
         expires_ms: i.policy.remember_days.map(|d| now + d as u64 * 86_400_000),
+        code_verified,
         prefs: i.defaults.clone(),
         window: None,
     };
@@ -439,6 +480,47 @@ fn persist(i: &Inner) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_open_mode_persists_and_enabling_code_requires_verification_without_losing_prefs() {
+        let dir=tempdir();write_private(&dir.join("access-token"),SETUP_REQUIRED.as_bytes()).unwrap();
+        let c=Clients::new("");c.load(dir.clone()).unwrap();
+        let open=c.setup(NO_CODE,"screen","car","","").unwrap();
+        assert!(!c.policy().required);assert!(!c.setup_required());assert!(!open.code_verified);
+        let mut prefs=open.prefs.clone();prefs.rail_side="right".into();c.set_prefs(&open.id,prefs.clone()).unwrap();
+        assert!(c.setup("234567","screen","","","").is_err());
+        let c=Clients::new("");c.load(dir.clone()).unwrap();
+        assert!(!c.policy().required);assert!(!c.get(&open.id).unwrap().code_verified);
+        let other=c.admit_browser(None,None,"phone","","","").unwrap();
+        assert_eq!(c.phone_access_status(&other.id).unwrap(),serde_json::json!({"mode":"open","token":""}));
+        c.set_token("234567").unwrap();assert!(c.policy().required);
+        assert!(c.phone_access_status(&other.id).is_none());
+        assert!(c.get(&open.id).is_none());assert!(c.get(&other.id).is_none());
+        assert!(c.admit_browser(Some("345678"),Some(&open.id),"screen","","","").is_err());
+        let verified=c.admit_browser(Some("234567"),Some(&open.id),"screen","changed","","").unwrap();
+        assert_eq!(verified.id,open.id);assert_eq!(verified.prefs,prefs);assert_eq!(verified.name,"car");assert_eq!(c.list().len(),2);
+        let c=Clients::new("");c.load(dir.clone()).unwrap();
+        assert!(c.get(&open.id).is_some());assert!(c.get(&other.id).is_none());
+        c.set_token("345678").unwrap();assert!(c.get(&open.id).is_some());
+        c.disable_token().unwrap();assert!(c.get(&other.id).is_some());
+        c.set_token("456789").unwrap();assert!(c.get(&other.id).is_none());
+        c.remove(&other.handle()).unwrap();
+        let replaced=c.admit_browser(Some("456789"),Some(&other.id),"phone","","","").unwrap();assert_ne!(replaced.id,other.id);
+        let legacy=serde_json::to_value(&verified).unwrap();assert!(legacy.get("code_verified").is_none());
+        assert!(serde_json::from_value::<Client>(legacy).unwrap().code_verified);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn first_open_or_code_choice_is_atomic_and_upgrade_write_failure_denies_access() {
+        let c=std::sync::Arc::new(Clients::new(""));
+        let threads:Vec<_>=[NO_CODE,"234567"].into_iter().map(|code|{let c=c.clone();std::thread::spawn(move||c.setup(code,"phone","","","").is_ok())}).collect();
+        assert_eq!(threads.into_iter().filter_map(|t|t.join().ok()).filter(|ok|*ok).count(),1);
+        let dir=tempdir();let c=Clients::new("");c.load(dir.clone()).unwrap();c.disable_token().unwrap();
+        let browser=c.admit_browser(None,None,"screen","","","").unwrap();c.set_token("234567").unwrap();
+        std::fs::remove_file(dir.join("clients.json")).unwrap();std::fs::create_dir(dir.join("clients.json")).unwrap();
+        assert!(c.admit_browser(Some("234567"),Some(&browser.id),"screen","","","").is_err());
+        assert!(!c.available());assert!(c.get(&browser.id).is_none());assert!(!c.inner.lock().unwrap().clients[0].code_verified);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn first_setup_is_once_persistent_and_independent_of_browser_list() {
         let dir = tempdir();

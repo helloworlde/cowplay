@@ -353,7 +353,7 @@ fn validate(
     }
     // One explicitly reviewed transition from the pre-release numbering scheme.
     // A partial/mixed install or any other downgrade still needs manual review.
-    let first_release_migration = m.version == "0.0.1-r0"
+    let first_release_migration = matches!(m.version.as_str(), "0.0.1-r0" | "0.0.2-r0")
         && m.upgrade_from.iter().any(|v| v == "0.3.14-r34")
         && current.len() == NAMES.len()
         && NAMES.iter().all(|name| current.get(*name).is_some_and(|v| v == "0.3.14-r34"));
@@ -1456,6 +1456,11 @@ esac
         for old in ["0.3.14-r33", "0.3.14-r35", "0.0.2-r0"] { assert!(valid(&m, &pair(old)).is_err()); }
         let mut mixed = pair("0.3.14-r34"); mixed.insert("luci-app-cowplay".into(), "0.0.1-r0".into());
         assert!(valid(&m, &mixed).is_err()); mixed.remove("luci-app-cowplay"); assert!(valid(&m, &mixed).is_err());
+        m.version="0.0.2-r0".into();m.tag="v0.0.2".into();m.upgrade_from.push("0.0.1-r0".into());
+        for pkg in &mut m.packages {pkg.file=format!("{}-{}-{}.apk",pkg.name,m.version,pkg.arch);}
+        assert!(valid(&m,&pair("0.3.14-r34")).is_ok());assert!(valid(&m,&pair("0.0.1-r0")).is_ok());
+        assert!(valid(&m,&pair("0.0.3-r0")).is_err());
+        assert!(valid(&m,&pair("0.3.14-r33")).is_err());
         m.upgrade_from.clear(); assert!(valid(&m, &pair("0.3.14-r34")).is_err());
     }
     #[test]

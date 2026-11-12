@@ -880,7 +880,10 @@ async fn segments_post(State(a): State<Arc<Admin>>, h: HeaderMap, body: Bytes) -
 }
 async fn token_get(State(a): State<Arc<Admin>>, h: HeaderMap) -> Response {
     match client(&a, &h, false) {
-        Ok(c) if c.kind == "phone" => json_ok(json!({"token": a.hub.clients.token()})),
+        Ok(c) if c.kind == "phone" => match a.hub.clients.phone_access_status(&c.id) {
+            Some(status) => json_ok(status),
+            None => fail(StatusCode::UNAUTHORIZED, "请重新验证访问码"),
+        },
         Ok(_) => fail(StatusCode::FORBIDDEN, "令牌只能在手机或管理页查看"),
         Err(r) => r,
     }

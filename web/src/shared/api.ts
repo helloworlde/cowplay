@@ -46,10 +46,11 @@ export const sendCmd = (cmd: string, id?: string, signal?: AbortSignal, generati
 export interface AuthStatus { authorized: boolean; required: boolean; setup_required?: boolean; locked_s: number | null; client: ClientInfo | null }
 export interface ClientInfo { id: string; kind: 'screen' | 'phone'; name: string; ua: string; ip: string; last_ms: number; prefs: ScreenPrefs; window: WindowInfo | null; viewing?: boolean }
 export const authStatus = () => api<AuthStatus>('/api/auth');
-/** Each new browser must verify the receiver access code. */
+/** Each browser gets its own cookie; a code is required only when explicitly enabled. */
 export const admit = (kind: 'screen' | 'phone', extra: { token?: string; name?: string } = {}) => api<{ authorized: boolean; client: ClientInfo }>('/api/auth', { body: { kind, ...extra } });
 
 export const setupAccess = (kind: 'screen' | 'phone', token: string, confirmation: string, name: string) => api('/api/auth/setup', {body: {kind, token, confirmation, name}});
+export const setupOpenAccess = (kind: 'screen' | 'phone', name: string) => api('/api/auth/setup', {body: {mode: 'open', kind, name}});
 
 // ---------- shared state ----------
 export type Quality = 'auto' | 'smooth' | 'sharp' | 'custom';

@@ -55,9 +55,10 @@ async function rpc(m){if(m.method==='list')return {jsonrpc:'2.0',id:m.id,result:
  if(method==='logs'){const entries=[{seq:2,ts_ms:Date.now(),level:'WARN',module:'bt',msg:'合成蓝牙警告'},{seq:1,ts_ms:Date.now()-1000,level:'INFO',module:'web',msg:'合成日志 · 仅验证 LuCI UI'}].filter(e=>(!args.module||e.module===args.module)&&(!args.level||args.level==='info'||args.level==='warn'&&e.level==='WARN'||args.level==='error'&&e.level==='ERROR'));r={entries,lines:entries.map(e=>e.level+' '+e.module+' '+e.msg+'\n'),total:2,matched:entries.length};}
  if(method==='logs'){r.memory={bytes:123456,cap_bytes:4194304,evicted:3};r.storage={active:true,file_limit_bytes:33554432,archive_limit_bytes:134217728,queue_capacity_lines:4096,queue_dropped:1,failures:0};r.retention_days=7;r.persistent_enabled=true;r.source='current_process_ram';r.limit=150;}
  if(method==='logs_export')r={text:'CowPlay 运行日志\n=== 当前进程内存日志 ===\n00:00:01.000 WARN bt synthetic reconnect failed\n=== 已保留磁盘日志 ===\n00:00:00.000 ERROR video synthetic header timeout\n本次仅包含最近记录，较早日志已截断。\n'};
- if(method==='token')r={token:accessCode};
+ if(method==='token')r={token:accessCode,mode:accessCode?'code':'open'};
  if(method==='token_set'){if(/^\d{6}$/.test(args.token)){accessCode=args.token;r={ok:true};}else r={error:'请输入六位数字访问码'};}
- if(method==='token_reset'){accessCode='654321';r={token:accessCode};}
+ if(method==='token_disable'){accessCode='';r={ok:true};}
+ if(method==='token_reset'){accessCode='654321';r={token:accessCode,mode:accessCode?'code':'open'};}
  if(method==='reload'){builtinDdns=config.cowplay.main.ddns_enabled==='1'&&config.cowplay.main.ddns_mode!=='luci';r={ok:true,restart_required:reloadRequiresRestart};}
  if(method==='selftest'){r={...await fetchApi('selftest/segments'),context,context_current:true,ts_ms:Date.now()};r.steps=r.steps.map(v=>({...v,state:v.ok?'ok':'unknown'}));connectionCheck=r;}
  if(method==='bundle')r={kind:'cowplay-diagnostics',generated_ms:Date.now(),metrics:await fetchApi('stats'),context,connection_check:connectionCheck,logs:'synthetic only'};

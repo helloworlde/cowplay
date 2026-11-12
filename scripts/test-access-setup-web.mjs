@@ -35,6 +35,52 @@ try {
   assert.equal(await browser.evaluate("document.querySelector('#token-title').textContent"),'输入访问码');
   await press('567890');await browser.wait(()=>browser.evaluate("document.querySelector('#token-layer').hidden"),'retry uses saved code immediately');
   assert.equal(await browser.evaluate('setupPosts'),1);
+  // Explicitly choosing no code works on both form factors; cancel never commits a mode.
+  const clickText=text=>browser.evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(text)});if(!b)throw Error('missing dialog button');b.click()})()`);
+  await service.fixture({accessSetup:true,auth:false});await browser.goto(service.origin+'/car');
+  await browser.wait(()=>browser.evaluate("!document.querySelector('#token-open').hidden"),'car optional choice');
+  assert.equal(await browser.evaluate("(()=>{const r=document.querySelector('#token-open').getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight})()"),true,'choice fits 800x480');
+  await browser.evaluate("document.querySelector('#token-open').click()");await clickText('取消');assert.equal((await service.fixture({})).authorized,false);
+  shots.push(await browser.shot('car-optional-access'));
+  await browser.evaluate("document.querySelector('#token-open').click()");await clickText('不设置并进入');
+  await browser.wait(()=>browser.evaluate("document.querySelector('#token-layer').hidden"),'car skips code');
+  await service.fixture({auth:false});await browser.viewport(390,844);await browser.goto(service.origin+'/phone');
+  await browser.wait(()=>browser.evaluate("document.documentElement.dataset.ready==='true'&&!document.querySelector('form.auth')&&!document.querySelector('#access-retry')"),'new phone automatically enters explicit open mode');
+  await service.fixture({accessSetup:true,auth:false});await browser.goto(service.origin+'/phone');
+  await browser.wait(()=>browser.evaluate("!!document.querySelector('#access-skip')"),'phone optional choice');
+  await browser.evaluate("document.querySelector('#access-skip').click()");await clickText('不设置并进入');
+  await browser.wait(()=>browser.evaluate("!document.querySelector('form.auth')"),'phone skips code');
+  // Open mode also verifies cookie storage. Failed storage must stop, with an explicit retry.
+  await service.fixture({accessSetup:true,auth:false});await browser.viewport(800,480);await browser.goto(service.origin+'/car');
+  await browser.wait(()=>browser.evaluate("!document.querySelector('#token-open').hidden"),'car fresh choice');
+  await browser.evaluate(`window.openPosts=0;const original=window.fetch;window.fetch=async(url,init)=>{const r=await original(url,init);if((url==='/api/auth/setup'||url==='/api/auth')&&init?.method==='POST'){openPosts++;await original('/__fixture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:false})});}return r;}`);
+  await browser.evaluate("document.querySelector('#token-open').click()");await clickText('不设置并进入');
+  await browser.wait(()=>browser.evaluate("document.querySelector('#token-msg').textContent.includes('浏览器未保存授权')"),'open cookie failure');
+  assert.equal(await browser.evaluate("document.querySelector('#token-open').textContent"),'重新进入');assert.equal(await browser.evaluate('openPosts'),1);
+  assert.equal(await browser.evaluate("document.querySelector('#keys').hidden"),true);
+  await browser.evaluate("document.querySelector('#token-open').click()");await browser.wait(()=>browser.evaluate('openPosts===2'),'one explicit retry');
+  assert.equal((await service.fixture({})).authorized,false);
+  await service.fixture({accessSetup:true,auth:false});await browser.viewport(390,844);await browser.goto(service.origin+'/phone');
+  await browser.wait(()=>browser.evaluate("!!document.querySelector('#access-skip')"),'phone cookie failure setup');
+  await browser.evaluate(`window.openPosts=0;const original=window.fetch;window.fetch=async(url,init)=>{const r=await original(url,init);if((url==='/api/auth/setup'||url==='/api/auth')&&init?.method==='POST'){openPosts++;await original('/__fixture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:false})});}return r;}`);
+  await browser.evaluate("document.querySelector('#access-skip').click()");await clickText('不设置并进入');
+  await browser.wait(()=>browser.evaluate("!!document.querySelector('#access-retry')"),'phone open cookie failure explicit retry');assert.equal(await browser.evaluate('openPosts'),1);
+  shots.push(await browser.shot('phone-open-cookie-recovery'));
+  // Another browser can finish setup while this page still displays the code form.
+  await service.fixture({accessSetup:true,auth:false});await browser.viewport(800,480);await browser.goto(service.origin+'/car');
+  await browser.wait(()=>browser.evaluate("document.querySelector('#token-title').textContent==='首次设置访问码'"),'competing car setup');
+  await press('234567');await service.fixture({accessOpen:true});await press('234567');
+  await browser.wait(()=>browser.evaluate("document.querySelector('#token-open').textContent==='重新进入'&&!document.querySelector('#token-open').hidden"),'car observes competing open choice');
+  assert.equal(await browser.evaluate("document.querySelector('#keys').hidden"),true);
+  await browser.evaluate("document.querySelector('#token-open').click()");await browser.wait(()=>browser.evaluate("document.querySelector('#token-layer').hidden"),'car retries open choice');
+  await service.fixture({accessSetup:true,auth:false});await browser.viewport(390,844);await browser.goto(service.origin+'/phone');
+  await browser.wait(()=>browser.evaluate("!!document.querySelector('#access-skip')"),'competing phone setup');
+  await browser.evaluate(`window.setupRequests=0;const original=window.fetch;window.fetch=async(url,init)=>{if(url==='/api/auth/setup'){setupRequests++;await new Promise(resolve=>window.releaseSetup=resolve);}return original(url,init);};document.querySelector('input[aria-label="设置访问码"]').value='234567';document.querySelector('input[aria-label="确认访问码"]').value='234567';document.querySelector('form.auth').requestSubmit();`);
+  assert.equal(await browser.evaluate("document.querySelector('#access-skip').disabled"),true);
+  await browser.evaluate("document.querySelector('#access-skip').click()");assert.equal(await browser.evaluate('setupRequests'),1);
+  await service.fixture({accessOpen:true});await browser.evaluate('releaseSetup()');
+  await browser.wait(()=>browser.evaluate("!!document.querySelector('#access-retry')"),'phone observes competing open choice');
+  await browser.evaluate("document.querySelector('#access-retry').click()");await browser.wait(()=>browser.evaluate("!document.querySelector('#access-retry')&&!document.querySelector('form.auth')"),'phone retries open choice');
   assert.deepEqual(browser.errors,[]);
-  console.log(JSON.stringify({passed:true,checks:['car first setup','confirmation mismatch','remembered browser','new phone rejects QR bypass','wrong code rejected','same receiver code on new phone','phone first setup','saved code survives missing cookie and immediate retry'],shots}));
+  console.log(JSON.stringify({passed:true,checks:['car first setup','confirmation mismatch','remembered browser','new phone rejects QR bypass','wrong code rejected','same receiver code on new phone','phone first setup','saved code survives missing cookie and immediate retry','explicit optional choice and cancel at 800x480','new browser enters open mode','phone optional choice','open cookie failure requires explicit retry','competing first choice recovers on both pages','code submit excludes skip request'],shots}));
 } finally {await browser.close();await service.close();}

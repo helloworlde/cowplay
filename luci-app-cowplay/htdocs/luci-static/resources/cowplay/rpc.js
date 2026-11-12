@@ -5,7 +5,7 @@
 var schema = {
     update_status: [], update_check: ['tag'], update_apply: ['id'], update_acknowledge: ['id'],
     status: [], diag: [], phones: [], screens: [], logs: ['level', 'limit', 'module'], logs_export: [], timeline: ['scope'], proc: [],
-    token: [], token_reset: [], token_set: ['token'], cert: [], certificate_export: ['kind'], config_export: [], cmd: ['cmd', 'id'], client_remove: ['id'],
+    token: [], token_reset: [], token_set: ['token'], token_disable: [], cert: [], certificate_export: ['kind'], config_export: [], cmd: ['cmd', 'id'], client_remove: ['id'],
     reload: [], selftest: [], bundle: [], service_info: [], network_check: ['port'], network_prepare: ['port', 'fingerprint', 'management_scheme', 'management_port'], network_commit: ['id'], network_status: ['id'], network_confirm: ['id','management_scheme','management_port'], network_cancel: ['id'], network_recover: ['id'], ddns_sync: [], ddns_token: ['token'],
     mfi_upload: ['certificate', 'private_key'], cert_upload: ['cert', 'key'], cert_rollback: [], cert_renew: [], config_import: ['text'], factory_reset: [], service: ['action'], network_info: [],
     tesla_status: [], tesla_ultra_control: ['enabled', 'session', 'context'], tesla_configure: ['vin', 'enabled'], tesla_connect: [], tesla_disconnect: [], tesla_pair: [], tesla_cancel: [], tesla_climate_pair: [], tesla_climate_query: [], tesla_climate_command: ['action', 'on', 'driver_celsius', 'passenger_celsius']
