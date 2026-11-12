@@ -1108,8 +1108,8 @@ pub async fn cli(action: &str, input: &Value) -> Result<Value> {
     cli_at(&Paths::live(), action, input).await
 }
 
-/// Local administrator bootstrap, invoked only after the downloaded executable's
-/// release signature has been checked. Never exposed through rpcd.
+/// Local administrator bootstrap using the executable's embedded release key.
+/// Used by package hooks and the signature-verified helper; never exposed through rpcd.
 pub fn bootstrap() -> Result<()> {
     bootstrap_at(&Paths::live(), include_bytes!("../packaging/release-key.pem"))
 }

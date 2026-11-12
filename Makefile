@@ -194,6 +194,7 @@ test-luci: web
 
 test-package:
 	mkdir -p target
+	python3 scripts/test-private-key-download.py
 	python3 scripts/test-package-lifecycle.py
 	python3 scripts/test-deploy-autostart.py
 

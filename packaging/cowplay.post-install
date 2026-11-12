@@ -3,4 +3,7 @@
 # do not start it, touch pairings, or override an existing upgrade's boot preference.
 [ -z "${IPKG_INSTROOT:-}" ] || exit 0
 set -eu
+if [ ! -e /etc/cowplay/releases.json ] && [ ! -e /etc/cowplay/release-key.pem ]; then
+    /usr/bin/cowplay update-bootstrap
+fi
 /etc/init.d/cowplay enable

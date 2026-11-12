@@ -4,9 +4,11 @@ import os
 from pathlib import Path
 import subprocess
 import shlex
+import sys
 import tempfile
 
-source = Path(__file__).resolve().parents[1] / 'luci-app-cowplay/htdocs/cgi-bin/cowplay-key-download'
+project = Path(__file__).resolve().parents[1]
+source = project / 'luci-app-cowplay/htdocs/cgi-bin/cowplay-key-download'
 with tempfile.TemporaryDirectory(prefix='cowplay-key-cgi-') as tmp:
     root = Path(tmp)
     secret = b'SYNTHETIC-PRIVATE-KEY-ONLY\x00DER'
@@ -58,3 +60,27 @@ with tempfile.TemporaryDirectory(prefix='cowplay-key-cgi-') as tmp:
     r=request(HTTP_COOKIE='sysauth_http='+'b'*32+'; sysauth_https='+'c'*32)
     assert r.stdout.endswith(secret), 'the POST session is authoritative; unrelated cookie paths do not choose a session'
     print('PASS: HTTP/HTTPS TLS/CarPlay attachments, no-store, origin/ACL rejection cases and loopback; synthetic keys only')
+
+    # Exercise the real packager's staging step: invoking `sh CGI` above bypasses
+    # the executable bit required by uhttpd. Only the final APK encoder is a stub.
+    apk = root/'apk-staging-capture'
+    apk.write_text('#!'+sys.executable+'\n'
+                   'import shutil,sys\n'
+                   'assert sys.argv[1] == "mkpkg"\n'
+                   'shutil.copytree(sys.argv[sys.argv.index("--files")+1], '
+                   'sys.argv[sys.argv.index("--output")+1])\n')
+    apk.chmod(0o700)
+    staged = root/'package-stage'
+    subprocess.run(['sh', str(project/'scripts/build-luci-apk.sh'), str(staged)],
+                   env=dict(os.environ, APK_TOOL=str(apk)), check=True)
+    for relative in ['www/cgi-bin/cowplay-key-download', 'usr/libexec/rpcd/cowplay',
+                     'etc/uci-defaults/90-cowplay']:
+        p = staged/relative
+        assert p.stat().st_mode & 0o777 == 0o755, f'packaged entry point is not executable: {relative}'
+    assert (staged/'www/luci-static/resources/view/cowplay/main.js').stat().st_mode & 0o777 == 0o644
+    staged_cgi = staged/'www/cgi-bin/cowplay-key-download'
+    assert staged_cgi.read_bytes() == source.read_bytes(), 'packaging must preserve CGI contents'
+    r = subprocess.run([str(staged_cgi)], env=dict(os.environ, REQUEST_METHOD='GET'),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    assert r.stdout.startswith(b'Status: 405 Method Not Allowed\r\n') and not r.stderr
+    print('PASS: real LuCI packaging keeps CGI/rpcd/defaults executable, static JS non-executable; staged CGI executes directly and rejects GET')

@@ -16,6 +16,19 @@ with tempfile.TemporaryDirectory(prefix="lifecycle-", dir=project / "target") as
     running = root / "running"
     state = root / "private-state"
     state.write_text("retained identity and pairings")
+    release_dir = root / "cowplay-config"
+    release_dir.mkdir()
+    release_source = release_dir / "releases.json"
+    release_key = release_dir / "release-key.pem"
+    bootstrap_events = root / "bootstrap-events"
+    cowplay = root / "cowplay"
+    cowplay.write_text('''#!/bin/sh
+[ "$1" = update-bootstrap ] || exit 1
+printf 'bootstrap\\n' >> "$TEST_DIR/bootstrap-events"
+printf '{"repository":"example/cowplay"}\\n' > "$TEST_DIR/cowplay-config/releases.json"
+printf 'synthetic-public-key\\n' > "$TEST_DIR/cowplay-config/release-key.pem"
+''')
+    cowplay.chmod(0o755)
     init.write_text('''#!/bin/sh
 case "$1" in
 running) test -f "$TEST_DIR/running";;
@@ -34,6 +47,8 @@ esac
     for name in ["post-install", "pre-upgrade", "post-upgrade", "pre-deinstall"]:
         source = (project / "packaging" / f"cowplay.{name}").read_text()
         source = source.replace("/etc/init.d/cowplay", shlex.quote(str(init)))
+        source = source.replace("/usr/bin/cowplay", shlex.quote(str(cowplay)))
+        source = source.replace("/etc/cowplay/", str(release_dir) + "/")
         source = source.replace("/var/run/cowplay-upgrade-running", shlex.quote(str(marker)))
         source = source.replace("/sys/class/bluetooth/hci0", shlex.quote(str(root / "hci0")))
         hooks[name] = root / name
@@ -43,13 +58,23 @@ esac
     def run(name, **extra):
         return subprocess.run(["/bin/sh", str(hooks[name])], env=dict(env, **extra), check=True, capture_output=True, text=True, timeout=25)
     run("post-install")
+    assert release_source.exists() and release_key.exists(), "direct APK install must initialize the update source and public key"
+    assert bootstrap_events.read_text().splitlines() == ["bootstrap"]
     assert events.read_text().splitlines() == ["enable"], "first install enables next boot without starting"
     assert not running.exists()
     before = events.read_bytes()
+    release_source.unlink()
+    release_key.unlink()
     run("post-install", IPKG_INSTROOT=str(root))
+    assert not release_source.exists() and not release_key.exists(), "offline image assembly must not initialize the host update source"
+    assert bootstrap_events.read_text().splitlines() == ["bootstrap"]
     assert events.read_bytes() == before, "offline install must not change the host boot setting"
     run("pre-upgrade")
     run("post-upgrade")
+    assert release_source.exists() and release_key.exists(), "upgrading a direct APK installation must initialize its missing update source"
+    assert bootstrap_events.read_text().splitlines() == ["bootstrap", "bootstrap"]
+    release_source.write_text('{"repository":"example/custom-source"}')
+    release_key.write_text('custom-public-key')
     assert not running.exists(), "a stopped service must stay stopped during upgrade"
     assert not marker.exists()
     running.touch()
@@ -61,6 +86,9 @@ esac
     reap.join()
     assert marker.exists() and not running.exists()
     run("post-upgrade")
+    assert release_source.read_text() == '{"repository":"example/custom-source"}'
+    assert release_key.read_text() == 'custom-public-key'
+    assert bootstrap_events.read_text().splitlines() == ["bootstrap", "bootstrap"], "upgrades must preserve administrator-selected trust"
     assert running.exists() and not marker.exists()
     run("pre-deinstall")
     assert not running.exists()
@@ -79,4 +107,9 @@ esac
     before = events.read_bytes()
     run("pre-deinstall", IPKG_INSTROOT=str(root))
     assert events.read_bytes() == before, "offline image assembly must not operate services"
+    # A partial administrator setup is preserved for explicit repair, not replaced.
+    release_key.unlink()
+    run("post-upgrade")
+    assert release_source.read_text() == '{"repository":"example/custom-source"}' and not release_key.exists()
+    assert bootstrap_events.read_text().splitlines() == ["bootstrap", "bootstrap"]
 print("LIFECYCLE_STOP_WAIT_RESUME_TIMEOUT_AND_STATE_RETENTION_PASSED")

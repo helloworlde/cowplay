@@ -6,3 +6,6 @@ if [ -f /var/run/cowplay-upgrade-running ]; then
     rm -f /var/run/cowplay-upgrade-running
     /etc/init.d/cowplay start
 fi
+if [ ! -e /etc/cowplay/releases.json ] && [ ! -e /etc/cowplay/release-key.pem ]; then
+    /usr/bin/cowplay update-bootstrap
+fi

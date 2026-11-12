@@ -61,7 +61,7 @@ return L.Class.extend({
             try { state = await cp.call('update_status'); statusKnown = true; draw(); }
             catch (e) { statusKnown = false; message.textContent = '无法读取更新状态：' + e.message + '。LuCI 更新期间可能短暂重载，请稍后刷新。'; sync(); acknowledge.disabled = true; }
         }
-        var root = E('div', {class: 'cw-card', 'data-cw-updater': ''}, [info, line('更新渠道', channel), line('版本标签', tag), E('div', {class: 'cw-actions'}, [check, apply, acknowledge]), message, E('p', {class: 'cw-foot'}, '正式渠道只接受正式版；开发渠道只接受 Pre-release。均验证预置信任公钥、签名、架构和状态兼容性，安装前重新核对渠道；切换渠道不允许降级。开发渠道检查最近 100 个发布中的最高版本，草稿不可安装。')]);
+        var root = E('div', {class: 'cw-card', 'data-cw-updater': ''}, [info, line('更新渠道', channel), line('版本标签', tag), E('div', {class: 'cw-actions'}, [check, apply, acknowledge]), message, E('p', {class: 'cw-foot'}, '正式版与开发版分开检查，安装前验证签名和兼容性。更新会短暂中断画面和声音，配置与配对保留。')]);
         draw(); check.disabled = true; if (onBusy) onBusy(true); refresh(); poll.add(refresh, 2);
         return root;
     }

@@ -15,8 +15,8 @@ cp -R "$app/htdocs/." "$files/www/"
 cp -R "$app/root/." "$files/"
 find "$files" -type d -exec chmod 755 '{}' +
 find "$files" -type f -exec chmod 644 '{}' +
-# rpcd only loads executable plugins.
-chmod 755 "$files/usr/libexec/rpcd/cowplay" "$files/etc/uci-defaults/90-cowplay"
+# uhttpd CGI handlers and rpcd plugins must remain executable after normalization.
+chmod 755 "$files/www/cgi-bin/cowplay-key-download" "$files/usr/libexec/rpcd/cowplay" "$files/etc/uci-defaults/90-cowplay"
 # default_postinst finds this package's uci-defaults through its file list.
 (cd "$files" && find . \( -type f -o -type l \) | sed 's|^\.||' | sort) > "$stage/list"
 mv "$stage/list" "$files/lib/apk/packages/luci-app-cowplay.list"
