@@ -22,9 +22,11 @@
 2. ARM64 构建 OpenWrt 双包并进行隔离安装与生命周期验证。
 3. 汇总实际产物，用一次性测试密钥验证完整发布清单。测试私钥和测试签名附件不上传。
 4. 与包版本匹配、位于 main 历史的标签才进入 Release 任务。`packaging/release-policy.json` 的 `channel` 必须明确为 `dev` 或 `stable`。当前为 `dev`，发布成 Pre-release 且不标记 Latest；正式版本须在验收和维护者确认后显式选择 `stable`。缺失或未知渠道使构建失败。发布任务验证生产公钥与仓库公钥完全一致，签名双 APK、发布清单和 SHA256SUMS。
-5. 正文、首次安装命令与 GitHub 预发布标记使用同一渠道策略，不自动汇入提交、PR 或现场记录。草稿上传后回读并验证文件集合、签名和每个哈希，全部通过后发布，最终发布时再次显式设置渠道与 Latest。已发布附件不可覆盖；修复使用新版本号。现有版本分类纠正使用原位元数据修改，保留签名附件。
+5. 正文、首次安装命令与 GitHub 预发布标记使用同一渠道策略，不自动汇入提交、PR 或现场记录。本地完成签名与哈希验证，草稿上传后下载全部附件，以 `diff --recursive` 与本地已验证目录逐字节比较，同时拒绝缺失、多余或变更的文件；通过后才发布，并显式设置渠道与 Latest。已发布附件不可覆盖；修复使用新版本号。现有版本分类纠正使用原位元数据修改，保留签名附件。
 
 生产密钥配置为 GitHub Secret `COWPLAY_RELEASE_SIGNING_KEY`，公开 PEM 的 SHA-256 配置为 Variable `COWPLAY_RELEASE_PUBLIC_KEY_SHA256`。`release` Environment 的审批规则由仓库管理员按需设置；工作流引用 Environment 不等于已设审批规则。签名私钥只临时写入 runner 私有目录，退出删除，签名容器禁网络。设备只接收公钥。
+
+工作流使用 [GitHub 官方 Action 并固定完整提交 SHA](https://docs.github.com/en/actions/reference/security/secure-use#using-third-party-actions)，原生 `docker://` Action 运行固定摘要的 Rust 镜像，官方 Action 管理 Node、Cargo 依赖缓存与产物传递。组合命令集中在 Makefile：`check-release`、`ci-web`、`ci-browser`、`ci-build`、`release-test`、`release-sign` 和 `release-publish`，本地容器入口也复用原生打包目标。发布使用 runner 自带的官方 `gh`，签名与兼容清单复用 APK v3／OpenSSL。增加外部发布 Action 会使其代码及依赖获得发布任务权限，固定版本仍需审查源码；当前未引入此类依赖。镜像摘要不固定 runner、npm 审计数据或 Alpine 在线安装的软件包，不能据此宣称完全可复现。
 
 附件固定为 13 个安装与验证文件：
 

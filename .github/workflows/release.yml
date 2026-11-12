@@ -19,10 +19,8 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-24.04
-            platform: linux/amd64
           - arch: arm64
             runner: ubuntu-24.04-arm
-            platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
@@ -35,102 +33,38 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Check version, compatibility and release tag
-        shell: bash
-        run: |
-          make check-version
-          python3 - <<'PY'
-          import json, re
-          from pathlib import Path
-          p = json.loads(Path('packaging/release-policy.json').read_text())
-          assert p['repository'] == 'helloworlde/cowplay'
-          assert p['channel'] in ['stable', 'dev']
-          assert p['openwrt_releases'] and isinstance(p['upgrade_from'], list)
-          assert all(re.fullmatch(r'\d+\.\d+\.\d+', v) for v in p['openwrt_releases'])
-          assert all(re.fullmatch(r'\d+\.\d+\.\d+-r\d+', v) for v in p['upgrade_from'])
-          front = Path('web/src/build.ts').read_text()
-          back = Path('crates/server/src/build_info.rs').read_text()
-          for name in ['BUILD_ID', 'PROTOCOL']:
-              assert re.search(name + r'[^=]*=\s*([^;]+)', front)[1].replace("'", '"') == re.search(name + r'[^=]*=\s*([^;]+)', back)[1]
-          PY
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-            version=$(cat packaging/VERSION)
-            test "$GITHUB_REF_NAME" = "v${version%-r0}"
-          fi
-      - name: Build and check frontend
-        run: |
-          npm ci --prefix web
-          npm audit --prefix web --audit-level=high
-          npm run build --prefix web
-          node scripts/test-frame-progress.mjs
-          node scripts/test-viewer-ping.mjs
-          node scripts/test-video-resolution.mjs
-          for file in $(find luci-app-cowplay/htdocs -name '*.js'); do node --check "$file"; done
-      - name: Test actual browser navigation, authorization and updates
+      - run: make check-release
+      - run: make ci-web
+      - name: Test browser navigation, authorization and updates
         if: matrix.arch == 'x86_64'
         env:
           CHROME_BIN: google-chrome
           LUCI_RUNTIME_DIR: target/luci-runtime
-        run: |
-          command -v "$CHROME_BIN"
-          readlink -f "$(command -v "$CHROME_BIN")"
-          timeout 15s "$CHROME_BIN" --version
-          python3 scripts/prepare-luci-test-runtime.py target/luci-runtime
-          node scripts/test-access-setup-web.mjs
-          node scripts/test-car-access-web.mjs
-          node scripts/test-tesla-navigation-web.mjs
-          node scripts/test-updater-luci.mjs
-          node scripts/test-luci-operation-ux.mjs
-          node scripts/test-tesla-management-web.mjs
-          node scripts/test-viewer-web.mjs
-      - name: Build native static Linux archive
+        run: make ci-browser
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target/cargo/registry
+            target/cargo/git
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build and test native Linux and OpenWrt packages
+        uses: docker://rust:1.99-alpine@sha256:44819b27be4c97b0e4d7203bd2e02c4820f97700211b6a37fb4c246a2de59383
         env:
           LINUX_ARCH: ${{ matrix.arch }}
-          LINUX_PLATFORM: ${{ matrix.platform }}
-        run: |
-          mkdir -p target
-          docker run --rm --platform "$LINUX_PLATFORM" -v "$GITHUB_WORKSPACE:/src" -w /src \
-            -v cowplay-cargo-registry:/usr/local/cargo/registry \
-            -e CARGO_TARGET_DIR=/src/target/linux -e LINUX_ARCH rust:1.99-alpine sh -ec '
-              apk add --no-cache musl-dev python3 >/dev/null
-              cargo build --locked --release
-              version=$(cat packaging/VERSION)
-              python3 scripts/build-linux-tar.py target/linux/release/cowplay "$LINUX_ARCH" "target/linux-dist/cowplay-$version-linux-$LINUX_ARCH.tar.gz"
-            '
-      - name: Test Rust and Linux installation/download
-        env:
-          LINUX_PLATFORM: ${{ matrix.platform }}
-        run: |
-          docker run --rm --platform "$LINUX_PLATFORM" -v "$GITHUB_WORKSPACE:/src" -w /src \
-            -v cowplay-cargo-registry:/usr/local/cargo/registry \
-            -e CARGO_TARGET_DIR=/src/target/linux rust:1.99-alpine sh -ec '
-              apk add --no-cache musl-dev openssl python3 coreutils util-linux curl >/dev/null
-              cargo test --workspace --locked
-              python3 scripts/test-linux-install.py
-              python3 scripts/test-linux-download.py
-            '
-      - name: Build actual OpenWrt core and LuCI APKs
-        if: matrix.arch == 'arm64'
-        run: make apk TARGET_DIR=target/linux
-      - name: Check OpenWrt lifecycle, recovery, signatures and actual package installation
-        if: matrix.arch == 'arm64'
-        run: |
-          docker run --rm --platform linux/arm64 -v "$GITHUB_WORKSPACE:/src" -w /src \
-            rust:1.99-alpine sh -ec '
-              apk add --no-cache openssl python3 curl >/dev/null
-              python3 scripts/test-package-lifecycle.py
-              python3 scripts/test-sysupgrade-restore.py
-              python3 scripts/test-release-artifacts.py
-            '
-          make test-apk TARGET_DIR=target/linux
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+          CARGO_HOME: /github/workspace/target/cargo
+          CARGO_TARGET_DIR: /github/workspace/target/linux
+        with:
+          entrypoint: /bin/sh
+          args: -ec "apk add --no-cache make; make ci-build"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cowplay-linux-${{ matrix.arch }}
           path: target/linux-dist/cowplay-*-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+          compression-level: 0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.arch == 'arm64'
         with:
           name: cowplay-apk
@@ -139,51 +73,28 @@ jobs:
             target/apk/luci-app-cowplay-*.apk
           if-no-files-found: error
           retention-days: 7
+          compression-level: 0
   verify-release:
     needs: build
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - &checkout-release
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      - &download-apk
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cowplay-apk
           path: target/apk
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      - &download-linux
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: cowplay-linux-*
           path: target/linux-dist
           merge-multiple: true
-      - name: Check complete release assets with an ephemeral test key
-        env:
-          TMPDIR: ${{ runner.temp }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker pull rust:1.99-alpine
-          cat > "$RUNNER_TEMP/apk" <<'SH'
-          #!/bin/sh
-          exec docker run --rm --network none --user "$(id -u):$(id -g)" \
-            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" \
-            -w "$GITHUB_WORKSPACE" rust:1.99-alpine apk "$@"
-          SH
-          chmod 700 "$RUNNER_TEMP/apk"
-          key="$RUNNER_TEMP/test-release.key"
-          trap 'rm -f "$key"' EXIT
-          umask 077
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$key"
-          version=$(cat packaging/VERSION)
-          python3 scripts/prepare-github-release.py --policy packaging/release-policy.json \
-            --core "target/apk/cowplay-$version.apk" --luci "target/apk/luci-app-cowplay-$version.apk" \
-            --linux-x86_64 "target/linux-dist/cowplay-$version-linux-x86_64.tar.gz" \
-            --linux-arm64 "target/linux-dist/cowplay-$version-linux-arm64.tar.gz" \
-            --sign-key "$key" --apk "$RUNNER_TEMP/apk" --output target/test-release-assets --notes target/test-release-notes.md
-          cd target/test-release-assets
-          openssl dgst -sha256 -verify release-key.pem -signature SHA256SUMS.sig SHA256SUMS
-          sha256sum -c SHA256SUMS
-          # Test-signed files and their key are never published or uploaded as artifacts.
+      - run: make release-test
   release:
     if: startsWith(github.ref, 'refs/tags/') && github.repository == 'helloworlde/cowplay'
     needs: verify-release
@@ -193,79 +104,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: cowplay-apk
-          path: target/apk
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          pattern: cowplay-linux-*
-          path: target/linux-dist
-          merge-multiple: true
-      - name: Prepare signing tool
-        run: |
-          docker pull rust:1.99-alpine
-          cat > "$RUNNER_TEMP/apk" <<'SH'
-          #!/bin/sh
-          exec docker run --rm --network none --user "$(id -u):$(id -g)" \
-            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" \
-            -w "$GITHUB_WORKSPACE" rust:1.99-alpine apk "$@"
-          SH
-          chmod 700 "$RUNNER_TEMP/apk"
-      - name: Sign release assets with the pinned production key
+      - *checkout-release
+      - *download-apk
+      - *download-linux
+      - name: Sign assets with the pinned production key
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.COWPLAY_RELEASE_SIGNING_KEY }}
           EXPECTED_PUBLIC_KEY_SHA256: ${{ vars.COWPLAY_RELEASE_PUBLIC_KEY_SHA256 }}
-          TMPDIR: ${{ runner.temp }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          key="$RUNNER_TEMP/cowplay-release.key"
-          trap 'rm -f "$key"' EXIT
-          test -n "$RELEASE_SIGNING_KEY"
-          test -n "$EXPECTED_PUBLIC_KEY_SHA256"
-          umask 077
-          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
-          unset RELEASE_SIGNING_KEY
-          actual=$(openssl pkey -in "$key" -pubout | sha256sum | cut -d ' ' -f 1)
-          test "$actual" = "$EXPECTED_PUBLIC_KEY_SHA256"
-          test "$actual" = "$(sha256sum packaging/release-key.pem | cut -d ' ' -f 1)"
-          version=$(cat packaging/VERSION)
-          python3 scripts/prepare-github-release.py --policy packaging/release-policy.json \
-            --core "target/apk/cowplay-$version.apk" --luci "target/apk/luci-app-cowplay-$version.apk" \
-            --linux-x86_64 "target/linux-dist/cowplay-$version-linux-x86_64.tar.gz" \
-            --linux-arm64 "target/linux-dist/cowplay-$version-linux-arm64.tar.gz" \
-            --sign-key "$key" --apk "$RUNNER_TEMP/apk" --output target/release-assets --notes target/release-notes.md
-      - name: Upload, download-verify and publish release
+        run: make release-sign
+      - name: Upload, verify and publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="$GITHUB_REF_NAME"
-          channel=$(python3 -c 'import json; print(json.load(open("packaging/release-policy.json"))["channel"])')
-          case "$channel" in
-            dev) prerelease=true; latest=false ;;
-            stable) prerelease=false; latest=true ;;
-            *) echo 'Invalid release channel' >&2; exit 1 ;;
-          esac
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft > "$RUNNER_TEMP/release.json"; then
-            python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["isDraft"], "Published releases cannot be overwritten"' "$RUNNER_TEMP/release.json"
-            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" target/release-assets/* --clobber
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file target/release-notes.md --prerelease="$prerelease" --latest=false
-          else
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
-              --title "CowPlay $tag" --prerelease="$prerelease" --latest=false --notes-file target/release-notes.md target/release-assets/*
-          fi
-          downloaded="$RUNNER_TEMP/downloaded-release"
-          mkdir "$downloaded"
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$downloaded"
-          diff <(find target/release-assets -type f -printf '%f\n' | sort) <(find "$downloaded" -type f -printf '%f\n' | sort)
-          cmp target/release-assets/SHA256SUMS "$downloaded/SHA256SUMS"
-          openssl dgst -sha256 -verify target/release-assets/release-key.pem \
-            -signature "$downloaded/SHA256SUMS.sig" "$downloaded/SHA256SUMS"
-          (cd "$downloaded" && sha256sum -c SHA256SUMS)
-          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease="$prerelease" --latest="$latest"
+        run: make release-publish
