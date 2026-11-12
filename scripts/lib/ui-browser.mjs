@@ -8,7 +8,7 @@ export function devToolsPort(dir) {
  const [port,endpoint]=data.split('\n');
  return /^[1-9]\d{0,4}$/.test(port)&&Number(port)<=65535&&/^\/devtools\/browser\/[^\s]+$/.test(endpoint??'')?Number(port):null;
 }
-export async function start(){const output=process.env.COWPLAY_UI_OUTPUT??fs.mkdtempSync(path.join(os.tmpdir(),'cowplay-ui-shots-'));fs.mkdirSync(output,{recursive:true});const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cowplay-ui-chrome-'));const chrome=spawn(chromeExecutable(),['--headless=new','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--user-data-dir='+dir,'--no-first-run','--no-default-browser-check','--disable-background-networking','about:blank'],{stdio:['ignore','ignore',fs.openSync(path.join(dir,'chrome.log'),'a')]});
+export async function start(){const output=process.env.COWPLAY_UI_OUTPUT??fs.mkdtempSync(path.join(os.tmpdir(),'cowplay-ui-shots-'));fs.mkdirSync(output,{recursive:true});const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cowplay-ui-chrome-'));const chrome=spawn(chromeExecutable(),['--headless=new','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--user-data-dir='+dir,'--no-first-run','--no-default-browser-check','--disable-background-networking','about:blank'],{stdio:['ignore',fs.openSync(path.join(dir,'chrome.log'),'a'),fs.openSync(path.join(dir,'chrome.log'),'a')]});
 let ws;
 const alive=()=>chrome.exitCode===null&&chrome.signalCode===null;
 const exitedWithin=ms=>new Promise(resolve=>{if(!alive()){resolve();return;}const done=()=>{clearTimeout(timer);chrome.off('exit',done);resolve();};const timer=setTimeout(done,ms);chrome.once('exit',done);});

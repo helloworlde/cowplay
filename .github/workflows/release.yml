@@ -72,6 +72,17 @@ jobs:
           CHROME_BIN: google-chrome
           LUCI_RUNTIME_DIR: target/luci-runtime
         run: |
+          command -v "$CHROME_BIN"
+          readlink -f "$(command -v "$CHROME_BIN")"
+          python3 - <<'PYCODE'
+          import os, pathlib, shutil
+          p = pathlib.Path(shutil.which(os.environ['CHROME_BIN']))
+          data = p.read_bytes()
+          print('Chrome executable:', p.resolve())
+          if data.startswith(b'#!'):
+              print('\n'.join(data.decode().splitlines()[:30]))
+          PYCODE
+          timeout 15s "$CHROME_BIN" --version
           python3 scripts/prepare-luci-test-runtime.py target/luci-runtime
           node scripts/test-car-access-web.mjs
           node scripts/test-tesla-navigation-web.mjs
