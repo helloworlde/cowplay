@@ -60,6 +60,7 @@ jobs:
       - name: Build and check frontend
         run: |
           npm ci --prefix web
+          npm audit --prefix web --audit-level=high
           npm run build --prefix web
           node scripts/test-frame-progress.mjs
           node scripts/test-viewer-ping.mjs
