@@ -50,8 +50,8 @@ pub struct DisplayInfo<'a> {
     pub width_mm: u16,
     /// Offer HEVC (`hevcInfo`); the phone makes the final choice.
     pub hevc: bool,
-    /// Calls/Siri through the car browser microphone: declare bidirectional PCM/Opus.
-    /// Playback-only mode retains media without offering receiver voice input.
+    /// Calls/Siri through the car browser microphone (PlayPort/DashPlay non-Tesla route):
+    /// declare PCM/Opus input. Output audio types remain present when the microphone is off.
     pub microphone: bool,
     pub right_hand_drive: bool,
 }
@@ -102,7 +102,7 @@ pub fn build(c: &DisplayInfo) -> Result<Vec<u8>> {
             ]),
         ),
     ]);
-    // Media playback is independent of receiver microphone capture.
+    // Keep the complete PlayPort output profile, independently of the selected microphone route.
     let format = |kind, audio, mask| {
         dict([
             ("type", number(kind)),
@@ -119,7 +119,7 @@ pub fn build(c: &DisplayInfo) -> Result<Vec<u8>> {
         entry
     };
     let opus = 0x70000000;
-    let mut format_list = vec![
+    let format_list = vec![
         with_input(100, "compatibility", pcm, pcm_mono),
         format(101, "compatibility", pcm),
         with_input(100, "default", pcm | opus, pcm_mono | opus),
@@ -130,10 +130,6 @@ pub fn build(c: &DisplayInfo) -> Result<Vec<u8>> {
         format(101, "default", pcm | 0x70000000),
         format(102, "media", 0x800000),
     ];
-    let voice = |v: &Value| matches!(v.as_dictionary().unwrap().get("audioType").and_then(Value::as_string), Some("telephony" | "speechRecognition"));
-    // iPhone rejects a bidirectional voice profile with no input formats, which also
-    // prevents media streams from being created. Do not offer voice without a microphone.
-    if !c.microphone { format_list.retain(|v| !voice(v)); }
     let formats = array(format_list);
     let latency = |t: u64, audio: Option<&str>| {
         let mut items = vec![("type", number(t)), ("inputLatencyMicros", number(0)), ("outputLatencyMicros", number(0))];
@@ -142,11 +138,10 @@ pub fn build(c: &DisplayInfo) -> Result<Vec<u8>> {
         }
         dict(items)
     };
-    let mut latency_list = vec![latency(100, None), latency(100, Some("default")),
+    let latency_list = vec![latency(100, None), latency(100, Some("default")),
         latency(100, Some("media")), latency(100, Some("telephony")),
         latency(100, Some("speechRecognition")), latency(100, Some("alert")),
         latency(101, None), latency(101, Some("default")), latency(102, Some("default"))];
-    if !c.microphone { latency_list.retain(|v| !voice(v)); }
     let latencies = array(latency_list);
     let mut entries = vec![
         ("sourceVersion", s("366.0")),
@@ -374,23 +369,34 @@ mod tests {
         );
     }
     #[test]
-    fn playback_only_profile_keeps_media_without_bidirectional_voice() {
-        let mut c = DisplayInfo {name:"synthetic",model:"F50",manufacturer:"test",device_id:"02:00:00:00:00:01",bluetooth_mac:"02:00:00:00:00:01",width:800,height:480,fps:30,width_mm:180,hevc:false,microphone:true,right_hand_drive:false};
-        let on = crate::bplist::decode(&build(&c).unwrap()).unwrap();
-        let on = on.as_dictionary().unwrap();
-        assert_eq!(on["audioFormats"].as_array().unwrap().len(), 9);
-        assert_eq!(on["audioLatencies"].as_array().unwrap().len(), 9);
-        let voice = |v:&Value| matches!(v.as_dictionary().unwrap().get("audioType").and_then(Value::as_string), Some("telephony" | "speechRecognition"));
-        let expected_formats:Vec<_> = on["audioFormats"].as_array().unwrap().iter().filter(|v| !voice(v)).cloned().map(|mut v| {v.as_dictionary_mut().unwrap().remove("audioInputFormats");v}).collect();
-        let expected_latencies:Vec<_> = on["audioLatencies"].as_array().unwrap().iter().filter(|v| !voice(v)).cloned().collect();
-        c.microphone = false;
-        let off = crate::bplist::decode(&build(&c).unwrap()).unwrap();
-        let off = off.as_dictionary().unwrap();
-        assert_eq!(off["audioFormats"].as_array().unwrap(), &expected_formats, "no-input mode must retain every playback format without offering bidirectional voice");
-        assert_eq!(off["audioLatencies"].as_array().unwrap(), &expected_latencies);
-        assert_eq!(expected_formats.len(), 7);
-        for (key, value) in on {
-            if key != "audioFormats" && key != "audioLatencies" { assert_eq!(&off[key], value, "unrelated declaration changed: {key}"); }
+    fn retains_complete_audio_outputs_without_a_microphone() {
+        let b = build(&DisplayInfo {
+            name: "synthetic",
+            model: "F50",
+            manufacturer: "test",
+            device_id: "02:00:00:00:00:01",
+            bluetooth_mac: "02:00:00:00:00:01",
+            width: 800,
+            height: 480,
+            fps: 30,
+            width_mm: 180,
+            hevc: false,
+            microphone: false, right_hand_drive: false,
+        })
+        .unwrap();
+        let info = crate::bplist::decode(&b).unwrap();
+        let d = info.as_dictionary().unwrap();
+        let formats = d["audioFormats"].as_array().unwrap();
+        assert_eq!(formats.len(), 9);
+        for v in formats {
+            let f = v.as_dictionary().unwrap();
+            assert!(!f.contains_key("audioInputFormats"));
+        }
+        for name in ["telephony", "speechRecognition"] {
+            assert!(formats.iter().any(|v| {
+                let row = v.as_dictionary().unwrap();
+                row["type"].as_unsigned_integer() == Some(100) && row["audioType"].as_string() == Some(name)
+            }), "disabling the microphone must retain the required {name} output entry");
         }
     }
 }

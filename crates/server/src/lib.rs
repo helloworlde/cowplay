@@ -190,7 +190,7 @@ pub struct DisplaySpec {
     pub fps: u8,
     pub width_mm: u16,
     pub hevc: bool,
-    /// Calls/Siri via the car browser microphone (declares telephony/speech input).
+    /// Permit browser microphone capture for calls/Siri, independently of codec capabilities.
     pub microphone: bool,
     pub right_hand_drive: bool,
 }

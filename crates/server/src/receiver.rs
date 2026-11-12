@@ -139,7 +139,9 @@ impl Credentials {
             fps: spec.fps,
             width_mm: spec.width_mm,
             hevc: spec.hevc,
-            microphone: spec.microphone,
+            // Codec capabilities describe implemented support; capture consent is gated
+            // separately by spec.microphone before mic_start below.
+            microphone: true,
             right_hand_drive: spec.right_hand_drive,
         })
         .unwrap_or_else(|_| self.info.clone());
@@ -1523,6 +1525,19 @@ mod tests {
     impl Identity for NoIdentity {
         fn certificate(&self)->&[u8] {&[]}
         fn sign_digest(&self,_:&[u8;32])->f50_core::Result<[u8;64]> {Err(f50_core::Error::Authentication)}
+    }
+    #[test]
+    fn capture_preference_does_not_remove_implemented_audio_capabilities() {
+        let credentials=Credentials{pairing_store:None,endpoint:None,pairing_id:b"synthetic-accessory".to_vec(),signing_seed:Zeroizing::new([0;32]),mfi:Arc::new(NoIdentity),info:Vec::new(),info_base:InfoBase{name:"synthetic".into(),model:"F50".into(),manufacturer:"test".into(),device_id:"02:00:00:00:00:01".into(),bluetooth_mac:"02:00:00:00:00:01".into()},width:800,height:480};
+        let mut spec=credentials.default_spec();
+        let off=credentials.info_for(&spec);
+        spec.microphone=true;
+        let on=credentials.info_for(&spec);
+        assert_eq!(off,on,"recording permission must not change implemented codec capabilities or break playback");
+        let info=bplist::decode(&off).unwrap();
+        let formats=info.as_dictionary().unwrap()["audioFormats"].as_array().unwrap();
+        assert_eq!(formats.len(),9);
+        assert_eq!(formats.iter().filter(|v| v.as_dictionary().unwrap().contains_key("audioInputFormats")).count(),4);
     }
     #[tokio::test]
     async fn phone_switch_closes_old_tcp_and_rejects_reentry_even_with_full_control_queue() {
