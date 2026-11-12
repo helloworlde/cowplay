@@ -30,6 +30,7 @@ mod tests{
     #[test]
     fn downgrade_copy_preserves_authorization_and_never_replaces_current_or_existing_files(){
         let dir=tempfile::tempdir().unwrap();fs::set_permissions(dir.path(),fs::Permissions::from_mode(0o700)).unwrap();
+        f50_server::settings::write_private(&dir.path().join("access-token"),b"123456").unwrap();
         let store=f50_server::clients::Clients::new("123456");store.load(dir.path().to_owned()).unwrap();
         let client=store.admit_token("123456","screen","synthetic","","").unwrap();
         let mut prefs=client.prefs.clone();prefs.quality="custom".into();prefs.resolution="720x1280".into();prefs.right_hand_drive=true;prefs.codec="hevc".into();store.set_prefs(&client.id,prefs).unwrap();

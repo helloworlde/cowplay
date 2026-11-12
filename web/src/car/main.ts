@@ -5,7 +5,7 @@ import {InputController} from '../input';
 import {parseWireMessage} from '../protocol';
 import {BUILD_ID, PROTOCOL} from '../build';
 import {$, h} from '../shared/dom';
-import {ApiError, admit, api, authStatus, getDiag, getState, getStats, linkBusy, pairingActive, pairingCode, pairingFinishing, recentLinkError, runSegments, saveError, targetPhone, sendCmd, setPrefs as postPrefs, type ScreenPrefs, type State} from '../shared/api';
+import {ApiError, admit, api, authStatus, setupAccess, getDiag, getState, getStats, linkBusy, pairingActive, pairingCode, pairingFinishing, recentLinkError, runSegments, saveError, targetPhone, sendCmd, setPrefs as postPrefs, type ScreenPrefs, type State} from '../shared/api';
 import {NearbyPhones, PairingConfirmation} from '../shared/pairing';
 import {FrameProgress} from '../shared/frame-progress';
 import {AudioControls} from './audio-controls';
@@ -30,7 +30,7 @@ function clearDiagnostics():void{segmentsRequest=null;app.segments=null;app.segm
 
 function authorizationChanged(): void {
   cancelConfirmation(); authorization++; commandSequence++; pendingCommands.clear(); pendingSave = null; resetPictureDraft(); clearDiagnostics();
-  app.state = null;app.ticket=null;
+  app.state = null;
   app.stats = null; app.statsAt = 0; app.statsError = '';
   app.prefsSaving = false; app.prefsError = '';
 }
@@ -357,7 +357,7 @@ function advance(): void {
   if (!s || !app.authorized) return;
   const phones = phonesOf(s), p = s.pairing;
   const sc = scene();
-  if (sc === 'onboard') { void ensureTicket(); openOnboardWindow(s); }
+  if (sc === 'onboard') { openOnboardWindow(s); }
   // The digits arrived (or the bond finished): the add scene has done its job.
   if (app.addPhone && (pairingCode(p) || pairingFinishing(p) || /^paired$/i.test(p.phase))) app.addPhone = false;
   if (s.hub.phone) { app.connectingSince = 0; if (p.generation > app.addFrom) app.addPhone = false; if (app.choose && !app.choose.manual) app.choose = null; }
@@ -383,11 +383,7 @@ setInterval(() => {
   const c = app.choose, st = app.state;
   if (c?.deadline && Date.now() >= c.deadline && c.picked && !(st && (pairingActive(st.pairing) || st.stopped))) { void pickPhone(c.picked,true); return; }
 }, 250);
-async function ensureTicket(): Promise<void> {
-  if (app.ticket && Date.now() - app.ticket.at < 240_000) return;
-  const owner=authorization,client=app.state?.me.id;
-  try { const r = await api<{ticket: string}>('/api/auth/ticket', {body: {}});if(!app.authorized||owner!==authorization||client!==app.state?.me.id)return;app.ticket={value:r.ticket,at:Date.now()};render(); } catch { /* QR falls back to the plain URL */ }
-}
+
 async function pickPhone(id: string,automatic=false): Promise<void> {
   if(app.choose)app.choose.deadline=0;
   const cmd=app.state?.hub.phone?'switchPhone':'connect';
@@ -432,14 +428,16 @@ const connectActions: ConnectActions = {
     render();
   },
   nearby: nearbyPhones,
-  async token(code: string) {
+  async token(code: string, confirmation?: string) {
     try {
-      await admit('screen', {token: code, name: browserName()});
+      if (app.setupRequired) await setupAccess('screen', code, confirmation ?? '', browserName());
+      else await admit('screen', {token: code, name: browserName()});
       // Verify the HttpOnly cookie on a second request, not just the token ACK.
-      if (!(await authStatus()).authorized) return '浏览器未保存授权，请允许此站点的 Cookie 后重试';
+      const status=await authStatus();app.setupRequired=!!status.setup_required;
+      if (!status.authorized) return '浏览器未保存授权，请允许此站点的 Cookie 后重试';
       await authorized(); return null;
     }
-    catch (e) { return e instanceof ApiError ? e.message : '暂时无法验证，请稍后再试'; }
+    catch (e) { if(app.setupRequired){try{app.setupRequired=!!(await authStatus()).setup_required;}catch{}} return e instanceof ApiError ? e.message : '暂时无法验证，请稍后再试'; }
   },
 };
 
@@ -542,7 +540,6 @@ function route(): void {
   if (m) {
     if (!app.authorized) { history.replaceState(null, '', location.pathname); render(); return; }
     if (m[1] && ['pic', 'audio', 'display', 'phones', 'devices', 'diag', 'about'].includes(m[1])) app.tab = m[1] as Tab;
-    if (app.tab === 'about') void ensureTicket();
     setView('settings');
   } else setView(app.rendered ? 'session' : 'connect');
 }
@@ -706,12 +703,8 @@ async function boot(): Promise<void> {
   try {
     const st = await authStatus();
     if (st.authorized) { await authorized(); return; }
-    if (!st.required) {
-      await admit('screen', {name: browserName()});
-      if ((await authStatus()).authorized) { await authorized(); return; }
-      $('token-msg').textContent = '浏览器未保存授权，请允许此站点的 Cookie 后重试';
-      $('token-msg').className = 'err';
-    }
+    app.setupRequired = !!st.setup_required;
+    $('token-msg').textContent = app.setupRequired ? '为这台 CowPlay 设置六位数字访问码。其他新设备也使用这个码。' : '输入首次设置的六位访问码。此浏览器验证一次后会记住授权。';
     if (st.locked_s) { $('token-msg').textContent = `错误次数太多，${Math.ceil(st.locked_s / 60)} 分钟后再试`; $('token-msg').className = 'err'; }
   } catch { $('token-msg').textContent = '暂时连不上 CowPlay，稍后自动重试'; setTimeout(() => void boot(), 5000); }
   render();

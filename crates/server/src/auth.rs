@@ -1,4 +1,4 @@
-//! Browser authorization endpoints: token keypad, QR tickets, and the open (no-token) policy.
+//! First-use receiver access-code setup and mandatory new-browser verification.
 use crate::{
     clients::{Client, Denied},
     Hub,
@@ -14,7 +14,7 @@ use axum::{
 use std::{net::SocketAddr, sync::Arc};
 
 pub fn router() -> Router<Arc<Hub>> {
-    Router::new().route("/api/auth", get(status).post(admit)).route("/api/auth/ticket", post(ticket))
+    Router::new().route("/api/auth", get(status).post(admit)).route("/api/auth/setup", post(setup))
 }
 /// Same-origin check for state-changing requests (cookies are SameSite=Strict as well).
 pub fn same_origin(hub: &Hub, headers: &HeaderMap) -> bool {
@@ -33,12 +33,14 @@ fn admitted(hub: &Hub, c: &Client) -> Response {
     no_store(r)
 }
 async fn status(State(hub): State<Arc<Hub>>, headers: HeaderMap) -> Response {
+    if !hub.clients.available() { return no_store(StatusCode::SERVICE_UNAVAILABLE.into_response()); }
     let client = hub.clients.from_headers(&headers);
     no_store(
         Json(serde_json::json!({
             "authorized": client.is_some(),
             "client": client.map(|c| c.public()),
-            "required": hub.clients.policy().required,
+            "required": true,
+            "setup_required": hub.clients.setup_required(),
             "locked_s": hub.clients.locked_s(),
         }))
         .into_response(),
@@ -50,7 +52,7 @@ struct Admit {
     #[serde(default)]
     token: Option<String>,
     #[serde(default)]
-    ticket: Option<String>,
+    confirmation: Option<String>,
     kind: String,
     #[serde(default)]
     name: String,
@@ -65,18 +67,6 @@ async fn admit(State(hub): State<Arc<Hub>>, headers: HeaderMap, ext: Extensions,
     let Ok(a) = serde_json::from_slice::<Admit>(&body) else { return StatusCode::BAD_REQUEST.into_response() };
     let ua = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).unwrap_or("");
     let ip = peer_ip(&ext);
-    if let Some(t) = a.ticket.as_deref() {
-        return match hub.clients.admit_ticket(t, &a.kind, &a.name, ua, &ip) {
-            Some(c) => {
-                crate::diag::diag().event("ok", "web", format!("{} 已通过扫码授权", if c.kind == "phone" { "手机" } else { "车机屏幕" }));
-                admitted(&hub, &c)
-            }
-            None => (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"二维码已过期，请在车机上重新打开二维码。"}))).into_response(),
-        };
-    }
-    if let Some(c) = hub.clients.admit_open(&a.kind, &a.name, ua, &ip) {
-        return admitted(&hub, &c);
-    }
     let Some(token) = a.token.as_deref() else {
         return no_store((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"需要访问令牌","required":true}))).into_response());
     };
@@ -96,15 +86,43 @@ async fn admit(State(hub): State<Arc<Hub>>, headers: HeaderMap, ext: Extensions,
         Err(Denied::Invalid) => StatusCode::BAD_REQUEST.into_response(),
     }
 }
-async fn ticket(State(hub): State<Arc<Hub>>, headers: HeaderMap) -> Response {
-    if !same_origin(&hub, &headers) {
-        return StatusCode::FORBIDDEN.into_response();
+async fn setup(State(hub): State<Arc<Hub>>, headers: HeaderMap, ext: Extensions, body: Bytes) -> Response {
+    if !same_origin(&hub, &headers) { return StatusCode::FORBIDDEN.into_response(); }
+    let Ok(a) = serde_json::from_slice::<Admit>(&body) else { return StatusCode::BAD_REQUEST.into_response() };
+    let Some(token) = a.token.as_deref() else { return StatusCode::BAD_REQUEST.into_response() };
+    if a.confirmation.as_deref() != Some(token) || !crate::clients::valid_token(token) {
+        return no_store((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"请输入两次相同的六位数字访问码"}))).into_response());
     }
-    if hub.clients.from_headers(&headers).is_none() {
-        return StatusCode::UNAUTHORIZED.into_response();
+    let ua = headers.get(header::USER_AGENT).and_then(|v|v.to_str().ok()).unwrap_or("");
+    match hub.clients.setup(token, &a.kind, &a.name, ua, &peer_ip(&ext)) {
+        Ok(c) => admitted(&hub, &c),
+        Err(message) => no_store((StatusCode::CONFLICT, Json(serde_json::json!({"error":message}))).into_response()),
     }
-    match hub.clients.ticket() {
-        Ok(t) => no_store(Json(serde_json::json!({"ticket":t,"expires_s":300})).into_response()),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    async fn post(hub: &Arc<Hub>, path: &str, origin: &str, body: serde_json::Value) -> Response {
+        router().with_state(hub.clone()).oneshot(Request::post(path).header("origin",origin).header("content-type","application/json").body(Body::from(body.to_string())).unwrap()).await.unwrap()
+    }
+    #[tokio::test]
+    async fn first_use_and_each_new_browser_require_the_receiver_code() {
+        let (hub,_)=Hub::new("".into(),"https://test.invalid".into());
+        let setup=serde_json::json!({"kind":"screen","token":"234567","confirmation":"234567"});
+        assert_eq!(post(&hub,"/api/auth/setup","https://foreign.invalid",setup.clone()).await.status(),StatusCode::FORBIDDEN);
+        assert_eq!(post(&hub,"/api/auth/setup",hub.origin(),serde_json::json!({"kind":"screen","token":"234567","confirmation":"345678"})).await.status(),StatusCode::BAD_REQUEST);
+        let first=post(&hub,"/api/auth/setup",hub.origin(),setup.clone()).await;
+        assert_eq!(first.status(),StatusCode::OK);assert!(first.headers().contains_key(header::SET_COOKIE));
+        assert_eq!(post(&hub,"/api/auth/setup",hub.origin(),setup).await.status(),StatusCode::CONFLICT);
+        hub.clients.set_policy(crate::clients::Policy{required:false,remember_days:None},Default::default());
+        for body in [serde_json::json!({"kind":"phone"}),serde_json::json!({"kind":"phone","token":"345678"})] {
+            assert_eq!(post(&hub,"/api/auth",hub.origin(),body).await.status(),StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(post(&hub,"/api/auth",hub.origin(),serde_json::json!({"kind":"phone","ticket":"old-ticket"})).await.status(),StatusCode::BAD_REQUEST);
+        assert_eq!(post(&hub,"/api/auth",hub.origin(),serde_json::json!({"kind":"phone","token":"234567"})).await.status(),StatusCode::OK);
+        assert_eq!(post(&hub,"/api/auth/ticket",hub.origin(),serde_json::json!({})).await.status(),StatusCode::NOT_FOUND);
     }
 }

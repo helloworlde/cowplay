@@ -131,9 +131,7 @@ pub async fn serve(
         prepared.pairings.clone(),
     );
     let (stop, rx) = tokio::sync::watch::channel(false);
-    if let Err(e) = hub.clients.load(config.state_dir.clone()) {
-        f50_server::diag_log!(Warn, "web", "client store unavailable: {e}");
-    }
+    hub.clients.load(config.state_dir.clone())?;
     let admin = crate::admin::Admin::with_store(
         manager.clone(),
         hub.clone(),

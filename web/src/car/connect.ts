@@ -20,7 +20,7 @@ export interface ConnectActions {
   addPhone(): void;
   /** Leave the add-iPhone scene; closes a window that is still open. */
   cancelAdd(): void;
-  token(code: string): Promise<string | null>;
+  token(code: string, confirmation?: string): Promise<string | null>;
   nearby: NearbyPhones;
 }
 
@@ -162,9 +162,9 @@ export function renderConnect(a: ConnectActions): void {
   switch (sc) {
     case 'onboard': {
       const p = s!.pairing;
-      t = ['第一次使用', '配对你的 iPhone', '用 iPhone 相机依次扫这两个码，只需要做一次。', 'iPhone 和 CowPlay 配对后，以后上车会自动连接'];
+      t = ['第一次使用', '配对你的 iPhone', '依次扫码；新浏览器需输入这台 CowPlay 的访问码。', 'iPhone 和 CowPlay 配对后，以后上车会自动连接'];
       const ssid = s?.network.ssid ?? '—';
-      const pairUrl = `${location.origin}/pair${app.ticket ? `#t=${app.ticket.value}` : ''}`;
+      const pairUrl = `${location.origin}/pair`;
       body.push(h('div', {class: 'qrs'},
         qrCard('第 1 步', '加入 Wi‑Fi', `${ssid} · 自动填入密码`, s?.wifi_qr ?? null, '加入 Wi‑Fi 的二维码'),
         qrCard('第 2 步', '打开配对页', `${location.host}/pair`, pairUrl, '打开配对页的二维码')));
@@ -259,6 +259,8 @@ export function renderConnect(a: ConnectActions): void {
   if (app.authorized && s) body.push(debug.update(s,app.channel));
   clear($('c-body'), ...body);
   $('token-layer').hidden = sc !== 'token';
+  $('token-title').textContent = app.setupRequired ? (firstCode ? '确认访问码' : '首次设置访问码') : '输入访问码';
+  $('token-reset').hidden = !app.setupRequired;
 }
 /** The link diagram yields its space before any button would fall below the screen (run after all inserts). */
 export function fitConnect(): void {
@@ -269,6 +271,7 @@ export function fitConnect(): void {
 
 // ---------- token keypad ----------
 let code = '';
+let firstCode = '';
 let busy = false;
 let keypadReady = false;
 export function setupKeypad(a: ConnectActions): void {
@@ -283,6 +286,7 @@ export function setupKeypad(a: ConnectActions): void {
     if (/^\d$/.test(e.key)) press(e.key, a);
     else if (e.key === 'Backspace') press('⌫', a);
   });
+  $('token-reset').onclick = () => { firstCode='';code='';drawDigits();$('token-title').textContent='首次设置访问码';$('token-msg').textContent='请设置六位数字访问码'; };
   drawDigits();
 }
 function drawDigits(): void { clear($('digits'), ...[0, 1, 2, 3, 4, 5].map(i => h('span', {class: i < code.length ? 'on' : ''}))); }
@@ -292,16 +296,19 @@ async function press(k: string, a: ConnectActions): Promise<void> {
   else if (k && code.length < 6) code += k;
   drawDigits();
   if (code.length < 6) return;
+  if(app.setupRequired&&!firstCode){firstCode=code;code='';drawDigits();$('token-title').textContent='确认访问码';$('token-msg').textContent='再输入一次刚设置的访问码';return;}
+  if(app.setupRequired&&code!==firstCode){code='';drawDigits();$('token-msg').textContent='两次输入不同，请重新确认，或点击重新设置';return;}
   busy = true;
-  const error = await a.token(code);
+  const error = await a.token(code, app.setupRequired ? firstCode : undefined);
   busy = false;
   code = '';
   drawDigits();
   const msg = $('token-msg');
   if (error) {
+    if(!app.setupRequired){firstCode='';$('token-title').textContent='输入访问码';$('token-reset').hidden=true;}
     msg.textContent = error; msg.className = 'err';
     $('digits').classList.remove('shake'); void $('digits').offsetWidth; $('digits').classList.add('shake');
   } else {
-    msg.textContent = '这台车机还没被授权。输一次就会记住；令牌可在手机“设置”里查看。'; msg.className = '';
+    msg.textContent = '输入这台 CowPlay 首次设置的访问码；此浏览器验证一次后会记住授权。'; msg.className = '';
   }
 }

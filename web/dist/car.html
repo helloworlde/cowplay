@@ -1,7 +1,7 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark"><title>CowPlay · 车机</title>  <script type="module" crossorigin src="/assets/car-CTcquMd5.js"></script>
-  <link rel="modulepreload" crossorigin href="/assets/confirmation-DU_ZwFSQ.js">
-  <link rel="modulepreload" crossorigin href="/assets/diagnostics-BPrRQH_V.js">
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark"><title>CowPlay · 车机</title>  <script type="module" crossorigin src="/assets/car-BCc_uhYM.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/confirmation-X9XmBPS0.js">
+  <link rel="modulepreload" crossorigin href="/assets/diagnostics-BPwCZUr_.js">
   <link rel="stylesheet" crossorigin href="/assets/confirmation-DsXtlCpT.css">
   <link rel="stylesheet" crossorigin href="/assets/diagnostics-BW9mAlCS.css">
   <link rel="stylesheet" crossorigin href="/assets/car-Yl4U-U0y.css">
@@ -26,9 +26,9 @@
   <footer class="c-foot"><span id="c-foot"></span><span id="c-admin" class="management-entry"></span></footer>
   <div id="token-layer" class="token-layer" hidden>
     <section class="token-dialog" role="dialog" aria-label="输入访问令牌">
-      <div class="token-head"><h2>输入访问令牌</h2><p id="token-msg">这台车机还没被授权。输一次就会记住；令牌可在手机“设置”里查看。</p></div>
+      <div class="token-head"><h2 id="token-title">输入访问码</h2><p id="token-msg">输入这台 CowPlay 首次设置的访问码，此浏览器验证一次后会记住授权。</p></div>
       <div id="digits" class="digits" aria-live="polite"></div>
-      <div id="keys" class="keys"></div>
+      <div id="keys" class="keys"></div><button id="token-reset" type="button" hidden>重新设置</button>
     </section>
   </div>
 </section>

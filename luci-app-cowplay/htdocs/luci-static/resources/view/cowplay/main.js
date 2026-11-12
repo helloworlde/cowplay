@@ -85,7 +85,7 @@ return view.extend({
             if (cmd === 'openPairWindow') description = '如有正在进行的 CarPlay、连接或配对尝试，会先停止，再打开新的配对窗口。已有手机配对保留。';
             if (cmd === 'forgetPhone') description = '将删除' + (phone ? phone.name : '这台 iPhone') + '的配对；之后需要重新配对。其他手机不受影响。';
         } else if (method === 'service') description = args[0] === 'enable' || args[0] === 'disable' ? '将' + (args[0] === 'enable' ? '开启' : '关闭') + ' CowPlay 开机自动启动；当前服务状态不变。' : args[0] === 'start' ? '将启动 CowPlay，随后可以连接已保存的 iPhone。' : '将' + (args[0] === 'stop' ? '停止' : '重启') + ' CowPlay，当前画面和声音会中断。配对与配置保留。';
-        else description = ({client_remove: '将立即撤销所选屏幕的访问授权，停止其画面和触控；再次使用需要重新授权。', token_reset: '将生成新的访问令牌，旧令牌不能再用于新增授权。已授权设备保留。', config_import: '将用所选文件替换 CowPlay 配置并刷新页面，未保存的编辑会丢弃。配对和配件身份保留；部分配置需要重启后生效。', mfi_upload: '将验证并保存所选配件证书及匹配私钥，原文件保留。需要手动重启 CowPlay 后生效，配对保留。', cert_upload: '将立即验证并替换 HTTPS 证书，并停止自动续期。访问可能短暂中断，已有配对保留。', cert_rollback: '将立即换回上一张 HTTPS 证书。访问可能短暂中断，已有配对保留。', cert_renew: '将使用已保存的域名和 DNS 凭据申请或续期 HTTPS 证书。签发结果见任务状态；通过校验的生产证书才会替换当前证书。', ddns_token: '将保存当前输入的证书 DNS API 凭据，供后续证书申请和续期使用。'})[method];
+        else description = ({client_remove: '将立即撤销所选屏幕的访问授权，停止其画面和触控；再次使用需要重新授权。', token_set: '将替换为输入的六位访问码；旧码不再用于新增授权，已授权设备保留。', token_reset: '将生成新的访问令牌，旧令牌不能再用于新增授权。已授权设备保留。', config_import: '将用所选文件替换 CowPlay 配置并刷新页面，未保存的编辑会丢弃。配对和配件身份保留；部分配置需要重启后生效。', mfi_upload: '将验证并保存所选配件证书及匹配私钥，原文件保留。需要手动重启 CowPlay 后生效，配对保留。', cert_upload: '将立即验证并替换 HTTPS 证书，并停止自动续期。访问可能短暂中断，已有配对保留。', cert_rollback: '将立即换回上一张 HTTPS 证书。访问可能短暂中断，已有配对保留。', cert_renew: '将使用已保存的域名和 DNS 凭据申请或续期 HTTPS 证书。签发结果见任务状态；通过校验的生产证书才会替换当前证书。', ddns_token: '将保存当前输入的证书 DNS API 凭据，供后续证书申请和续期使用。'})[method];
         return description || dangerous ? {title: label + '？', description: description || '确认执行此操作？', confirm: '确认' + label} : null;
     },
     syncActions: function() {
@@ -487,11 +487,17 @@ return view.extend({
         ]));
         var token = E('code', {}, '••••••'), tokenEpoch = 0, showEpoch = 0, resetEpoch = 0, tokenTimer;
         var hideToken = function() { tokenEpoch++; clearTimeout(tokenTimer); token.textContent = '••••••'; };
-        var revealToken = function(result, epoch) { if (epoch !== tokenEpoch) return; token.textContent = result.token; clearTimeout(tokenTimer); tokenTimer = setTimeout(hideToken, 30000); };
+        var revealToken = function(result, epoch) { if (epoch !== tokenEpoch) return; token.textContent = result.token || '尚未设置，请首次打开 CowPlay 设置'; clearTimeout(tokenTimer); tokenTimer = setTimeout(hideToken, 30000); };
         this.hideManagementToken = hideToken;
         document.addEventListener('visibilitychange', function() { if (document.hidden) hideToken(); });
         this.tokenDisplay = token;
         this.tokenActions = E('div', {class: 'cw-actions'}, [this.action('显示令牌', 'token', function() { hideToken(); showEpoch = tokenEpoch; return []; }, false, function(r) { revealToken(r, showEpoch); }), E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', click: hideToken}, '隐藏令牌'), this.action('重置令牌', 'token_reset', function() { hideToken(); resetEpoch = tokenEpoch; return []; }, true, function(r) { revealToken(r, resetEpoch); })]);
+        var newAccessCode = E('input', {type:'password',inputmode:'numeric',maxlength:6,autocomplete:'new-password','aria-label':'新访问码',placeholder:'六位数字访问码',disabled:!L.hasViewPermission() || null}), accessCodeSnapshot = '';
+        this.tokenActions.append(newAccessCode, this.action('修改访问码', 'token_set', function(){
+            if(!/^\d{6}$/.test(newAccessCode.value))throw new Error('请输入六位数字访问码');
+            accessCodeSnapshot = newAccessCode.value; newAccessCode.disabled = true; hideToken();
+            return [accessCodeSnapshot];
+        },true,function(){if(newAccessCode.value === accessCodeSnapshot)newAccessCode.value='';hideToken();},null,null,function(){newAccessCode.disabled = !L.hasViewPermission();}));
         var tokenField = E('input', {type: 'password', autocomplete: 'new-password', placeholder: '只写入，不回显', 'aria-label': '证书 DNS API 令牌', disabled: !L.hasViewPermission() || null});
         this.dnsToken = tokenField;
         var dnsSnapshot = '';

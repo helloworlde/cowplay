@@ -34,6 +34,7 @@
           "client_remove",
           "token",
           "token_reset",
+          "token_set",
           "reload",
           "selftest",
           "bundle",

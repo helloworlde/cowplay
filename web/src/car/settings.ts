@@ -119,7 +119,7 @@ export function renderPane(a: SettingsActions): void {
         group(...rows.map(([k, v, mono]) => h('div', {class: 'row'}, h('span', {class: 't'}, k), h('span', {class: `val${mono ? ' mono' : ''}`, style: mono ? 'font-size:max(12px,calc(13px*var(--k)))' : ''}, v)))),
         h('div', {class: 'qr-col'},
           qr(s.network.luci, s.network.platform === 'linux' ? 'CowPlay 管理' : '管理页（OpenWrt LuCI）', s.network.platform === 'linux' ? '画面上限、证书、访问令牌' : 'Wi‑Fi、证书、DDNS、令牌、系统', '管理页二维码'),
-          qr(`${location.origin}/phone${app.ticket ? `#t=${app.ticket.value}` : ''}`, '手机控制台', '遥控、诊断、日志', '手机控制台二维码'))));
+          qr(`${location.origin}/phone`, '手机控制台', '遥控、诊断、日志', '手机控制台二维码'))));
       body.push(h('details', {class: 'about-notices', open: noticesOpen},
         h('summary', {}, '开源许可'),
         h('p', {}, 'Based on LIVI by Lasse Heitgres (', h('a', {href: 'https://github.com/f-io/LIVI', target: '_blank', rel: 'noopener noreferrer'}, 'https://github.com/f-io/LIVI'), ')')));

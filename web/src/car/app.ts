@@ -42,7 +42,7 @@ export const app = {
   openError: null as null | {message: string; at: number},
   connectingSince: 0,
   lastSearch: 0,
-  ticket: null as null | {value: string; at: number},
+  setupRequired: false,
   /** Debug overlay is open (persisted per screen as prefs.debug). */
   fullscreen: false,
   sheet: false,

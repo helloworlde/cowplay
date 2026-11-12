@@ -95,6 +95,10 @@ pub async fn dispatch(a: &Arc<Admin>, method: &str, args: &Value) -> Result<Valu
             crate::phone_flow::reset_adapter(&a.manager, &a.hub).await.map_err(|e| e.to_string())?;
             json!({"ok": true})
         }
+        "token_set" => {
+            a.hub.clients.set_token(arg(args, "token").ok_or("缺少访问码")?).map_err(|e|e.to_string())?;
+            json!({"ok":true})
+        },
         "token" => match arg(args, "action").unwrap_or("show") {
             "reset" => {
                 let t = a.hub.clients.reset_token().map_err(|e| e.to_string())?;

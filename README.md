@@ -25,7 +25,7 @@ Rust 无线 CarPlay 接收端，主要面向安装 MU300 OpenWrt 的中兴 F50�
 - F50 配置结构见 `packaging/config.example.json`；Linux 见 `packaging/config.linux.example.json`。示例地址、域名、VIN、身份和密码均为占位值。
 - Linux 必须显式设置 `bluetooth.kind=system`，并提供支持 BR/EDR、RFCOMM 的专用适配器及系统 BlueZ/D-Bus。详见 [Linux 兼容配置](docs/LINUX.md)。
 - 私有配置、身份、证书和配对保存在设备本地。私有目录使用 `0700`，私钥与配置使用 `0600`；不要上传至本仓库、Issues、Actions artifacts 或 Release。
-- 导入时生成随机六位投屏授权码；已有授权码在覆盖安装时保留。若旧开发版仍使用默认码，请在 LuCI 的“设备与访问”中更新授权码；已授权屏幕和手机配对保留。Linux 管理使用独立随机令牌。
+- 首次打开全新 CowPlay 时自行设置六位访问码，无需先登录管理页。访问码随接收端保存，重启／升级不变；每个新浏览器必须正确输入，验证后各自记住。二维码不跳过验证。LuCI“设备与访问”或受保护的 Linux 管理页可修改、重置；已有浏览器和手机配对保留。
 - F50 的 `/admin` 转至 LuCI；Linux 独立管理页需要单独管理令牌。车机页面为 `/`，手机配对页为 `/pairing`。地址需与可信证书及 Origin 配置匹配。
 
 新手机先在 `/pairing` 打开配对窗口，在 iPhone 蓝牙设置选择 CowPlay，核对两端六码并确认，然后连接 CarPlay。已保存手机可选择连接或切换，一次连接一部手机。取消或断开不删除既有配对。

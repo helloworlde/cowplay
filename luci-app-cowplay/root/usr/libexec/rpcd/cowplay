@@ -3,7 +3,7 @@
 case "$1" in
 list)
 cat <<'JSON'
-{"status":{},"service_info":{},"network_check":{"port":0},"network_prepare":{"port":0,"fingerprint":"","management_scheme":"","management_port":0},"network_commit":{"id":""},"network_status":{"id":""},"network_confirm":{"id":"","management_scheme":"","management_port":0},"network_cancel":{"id":""},"network_recover":{"id":""},"diag":{},"phones":{},"screens":{},"logs":{"level":"","limit":0,"module":""},"logs_export":{},"timeline":{"scope":""},"proc":{},"token":{},"cert":{},"certificate_export":{"kind":""},"config_export":{},"cmd":{"cmd":"","id":""},"client_remove":{"id":""},"token_reset":{},"reload":{},"selftest":{},"bundle":{},"ddns_sync":{},"ddns_token":{"token":""},"mfi_upload":{"certificate":"","private_key":""},"cert_upload":{"cert":"","key":""},"cert_rollback":{},"cert_renew":{},"config_import":{"text":""},"factory_reset":{},"service":{"action":""},"network_info":{},"tesla_status":{},"tesla_configure":{"vin":null,"enabled":false},"tesla_connect":{},"tesla_disconnect":{},"tesla_pair":{},"tesla_cancel":{},"tesla_climate_pair":{},"tesla_climate_query":{},"tesla_ultra_control":{"enabled":false,"session":0,"context":0},"tesla_climate_command":{"action":"","on":false,"driver_celsius":0.0,"passenger_celsius":0.0},"update_status":{},"update_check":{"tag":""},"update_apply":{"id":""},"update_acknowledge":{"id":""}}
+{"status":{},"service_info":{},"network_check":{"port":0},"network_prepare":{"port":0,"fingerprint":"","management_scheme":"","management_port":0},"network_commit":{"id":""},"network_status":{"id":""},"network_confirm":{"id":"","management_scheme":"","management_port":0},"network_cancel":{"id":""},"network_recover":{"id":""},"diag":{},"phones":{},"screens":{},"logs":{"level":"","limit":0,"module":""},"logs_export":{},"timeline":{"scope":""},"proc":{},"token":{},"cert":{},"certificate_export":{"kind":""},"config_export":{},"cmd":{"cmd":"","id":""},"client_remove":{"id":""},"token_set":{"token":""},"token_reset":{},"reload":{},"selftest":{},"bundle":{},"ddns_sync":{},"ddns_token":{"token":""},"mfi_upload":{"certificate":"","private_key":""},"cert_upload":{"cert":"","key":""},"cert_rollback":{},"cert_renew":{},"config_import":{"text":""},"factory_reset":{},"service":{"action":""},"network_info":{},"tesla_status":{},"tesla_configure":{"vin":null,"enabled":false},"tesla_connect":{},"tesla_disconnect":{},"tesla_pair":{},"tesla_cancel":{},"tesla_climate_pair":{},"tesla_climate_query":{},"tesla_ultra_control":{"enabled":false,"session":0,"context":0},"tesla_climate_command":{"action":"","on":false,"driver_celsius":0.0,"passenger_celsius":0.0},"update_status":{},"update_check":{"tag":""},"update_apply":{"id":""},"update_acknowledge":{"id":""}}
 JSON
 ;;
 call)
@@ -25,6 +25,7 @@ call)
         action=${method#network_}; [ "$action" != check ] || action=check
         printf '%s' "$input" | /usr/bin/cowplay network "$action"
         exit $? ;;
+    token_set) ;;
     token_reset) method=token; input='{"action":"reset"}' ;;
     token) input='{"action":"show"}' ;;
     cert_upload) method=cert; input=$(printf '%s' "$input" | jsonfilter -e '@')

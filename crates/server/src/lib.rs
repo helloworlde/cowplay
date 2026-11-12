@@ -36,13 +36,14 @@ pub struct Config {
     pub origin: String,
     pub tls_certificate: String,
     pub tls_private_key: String,
+    #[serde(default)]
     pub access_token: String,
 }
 impl Config {
     pub fn validate(&self) -> Result<(), &'static str> {
         if !self.origin.starts_with("https://")
             || self.origin.ends_with('/')
-            || !f50_core::validation::access_token(&self.access_token)
+            || (!self.access_token.is_empty() && !f50_core::validation::access_token(&self.access_token))
         {
             return Err("invalid origin or token length");
         }
@@ -812,7 +813,8 @@ struct Hello {
 }
 #[cfg(test)]
 fn test_cookie(h: &Hub) -> String {
-    let c = h.clients.admit_token(&h.clients.token(), "screen", "test", "", "").unwrap();
+    let c = if h.clients.setup_required() { h.clients.setup("123456", "screen", "test", "", "").unwrap() }
+        else { h.clients.admit_token(&h.clients.token(), "screen", "test", "", "").unwrap() };
     format!("{}={}", clients::COOKIE, c.id)
 }
 #[cfg(test)]

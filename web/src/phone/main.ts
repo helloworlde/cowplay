@@ -1,7 +1,7 @@
 import {receiverName} from '../shared/receiver';
 import {confirmAction,cancelConfirmation,preferenceChanges,preferencePrompt,commandPrompt,stateContext} from '../shared/confirmation';
 import {$, clear, h, icon} from '../shared/dom';
-import {ApiError, admit, api, authStatus, download, getDiag, getState, getStats, pairingAdapterName, pairStage, recentLinkError, runSegments, saveError, sendCmd, setPrefs, targetPhone, type PairStage, type ScreenPrefs} from '../shared/api';
+import {ApiError, admit, api, authStatus, setupAccess, download, getDiag, getState, getStats, pairingAdapterName, pairStage, recentLinkError, runSegments, saveError, sendCmd, setPrefs, targetPhone, type PairStage, type ScreenPrefs} from '../shared/api';
 import {mmss} from '../shared/fmt';
 import {browserName, toast} from '../car/ui';
 import {NearbyPhones, PairingConfirmation} from '../shared/pairing';
@@ -308,26 +308,26 @@ function renderPair(): void {
   if (requestKey === previousRequest) $('content').querySelector<HTMLElement>('.pair-scroll')!.scrollTop = keep;
   $('tabs').hidden = true; document.documentElement.dataset.ready = 'true';
 }
-function authForm(message: string): void {
+function authForm(message: string, setup = false): void {
   $('tabs').hidden = true;
   const input = h('input', {name: 'token', type: 'password', inputmode: 'numeric', pattern: '[0-9]{6}', maxlength: '6', autocomplete: 'off', 'aria-label': '访问令牌', required: true});
   const msg = h('p', {class: 'foot', role: 'status'}, message);
-  const submit = h('button', {type: 'submit', class: 'primary'}, '连接 CowPlay');
-  const form = h('form', {class: 'auth'}, input, submit);
-  form.onsubmit = async e => { e.preventDefault(); submit.disabled = true; try { await admit('phone', {token: input.value, name: browserName()}); await authorized(); } catch (err) { msg.textContent = (err as Error).message; input.value = ''; } finally { submit.disabled = false; } };
-  clear($('content'), h('h1', {}, 'CowPlay'), h('p', {class: 'lead'}, '连接、遥控与诊断'), msg, form, foot('扫描车机上的二维码可直接授权。访问令牌由管理页提供。'));
+  const confirm = h('input', {type:'password',inputmode:'numeric',pattern:'[0-9]{6}',maxlength:'6',autocomplete:'new-password','aria-label':'确认访问码',required:setup});
+  input.setAttribute('aria-label', setup?'设置访问码':'访问码');
+  const submit = h('button', {type: 'submit', class: 'primary'}, setup?'保存并进入 CowPlay':'连接 CowPlay');
+  const form = h('form', {class: 'auth'}, h('label',{},setup?'设置六位访问码':'访问码',input), ...(setup?[h('label',{},'再输入一次',confirm)]:[]), submit);
+  form.onsubmit = async e => { e.preventDefault(); submit.disabled = true; try { if(setup) await setupAccess('phone',input.value,confirm.value,browserName()); else await admit('phone', {token: input.value, name: browserName()}); if(!(await authStatus()).authorized)throw Error('浏览器未保存授权，请允许此站点的 Cookie 后重试'); await authorized(); } catch (err) { msg.textContent = (err as Error).message; input.value = '';confirm.value='';if(setup){try{if(!(await authStatus()).setup_required)authForm((err as Error).message);}catch{}} } finally { submit.disabled = false; } };
+  clear($('content'), h('h1', {}, 'CowPlay'), h('p', {class: 'lead'}, '连接、遥控与诊断'), msg, form, foot(setup?'此码保存在这台 CowPlay 上，供每个新设备首次访问。以后可通过受保护的管理入口修改或重置。':'请输入这台 CowPlay 首次设置的访问码。忘记时可由管理员修改或重置。'));
   document.documentElement.dataset.ready = 'true';
 }
 async function authorized(): Promise<void> { accessChanged();app.authorized = true; clearInterval(pollTimer); pollTimer = window.setInterval(() => void poll(), 2000); route(); await poll(); }
 async function boot(): Promise<void> {
-  const ticket = new URLSearchParams(location.hash.slice(1)).get('t');
-  // Consume the ticket from the address bar immediately; it is never retained or logged.
-  if (ticket) history.replaceState(null, '', location.pathname);
+  if(new URLSearchParams(location.hash.slice(1)).has('t'))history.replaceState(null,'',location.pathname);
   try {
     const st = await authStatus();
     if (st.authorized) { await authorized(); return; }
-    if (ticket || !st.required) { await admit('phone', ticket ? {ticket, name: browserName()} : {name: browserName()}); await authorized(); return; }
-    authForm(st.locked_s ? `错误次数太多，${Math.ceil(st.locked_s / 60)} 分钟后再试` : '输入 6 位访问令牌，只需授权一次。');
+    if(st.setup_required){authForm('首次使用：为这台 CowPlay 设置六位数字访问码。',true);return;}
+    authForm(st.locked_s ? `错误次数太多，${Math.ceil(st.locked_s / 60)} 分钟后再试` : '输入六位访问码，此浏览器只需验证一次。');
   } catch (e) { authForm((e as Error).message); }
 }
 document.addEventListener('visibilitychange', () => { if(document.hidden){hideToken();render();}else void poll(); });

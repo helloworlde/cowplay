@@ -162,6 +162,11 @@ ln -s '../lib/cowplay/current/cowplay' "$prefix/bin/.cowplay.$$"
 mv -fT "$prefix/bin/.cowplay.$$" "$prefix/bin/cowplay"
 ln -s '../lib/cowplay/current' "$prefix/share/.cowplay.$$"
 mv -fT "$prefix/share/.cowplay.$$" "$prefix/share/cowplay"
+if [ ! -e "$root/var/lib/cowplay" ]; then
+    mkdir -p "$root/var/lib/cowplay"
+    chmod 0700 "$root/var/lib/cowplay"
+    "$prefix/bin/cowplay" init-access "$root/var/lib/cowplay"
+fi
 if [ "$use_systemd" = yes ]; then
     for directory in "$root/etc" "$root/etc/systemd" "$root/etc/systemd/system"; do
         if [ ! -d "$directory" ]; then mkdir "$directory"; chmod 0755 "$directory"; fi

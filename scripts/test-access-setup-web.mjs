@@ -1,0 +1,40 @@
+// First-use and new-browser access flows, real DOM with synthetic receiver state.
+import assert from 'node:assert/strict';
+import {start} from './lib/ui-browser.mjs';
+import {startFixture} from './lib/ui-fixture.mjs';
+const service=await startFixture(), browser=await start(), shots=[];
+try {
+  await service.fixture({accessSetup:true,auth:false,mode:'connecting',stopped:true});
+  await browser.viewport(800,480);await browser.goto(service.origin+'/car');
+  await browser.wait(()=>browser.evaluate("document.querySelector('#token-title').textContent==='首次设置访问码'"),'first-use screen');
+  const press=digits=>browser.evaluate(`for(const digit of ${JSON.stringify(digits)})[...document.querySelectorAll('#keys button')].find(b=>b.textContent===digit).click()`);
+  shots.push(await browser.shot('car-first-access-code'));
+  await press('234567');assert.equal(await browser.evaluate("document.querySelector('#token-title').textContent"),'确认访问码');
+  await press('345678');assert.match(await browser.evaluate("document.querySelector('#token-msg').textContent"),/两次输入不同/);
+  assert.equal((await service.fixture({})).authorized,false);
+  await press('234567');await browser.wait(()=>browser.evaluate("document.querySelector('#token-layer').hidden"),'first code saved and browser admitted');
+  await browser.goto(service.origin+'/car');await browser.wait(()=>browser.evaluate("document.querySelector('#token-layer').hidden"),'remembered browser');
+  await service.fixture({auth:false});await browser.viewport(390,844);await browser.call('Page.navigate',{url:service.origin+'/phone#t=old-ticket'});
+  await browser.wait(()=>browser.evaluate("document.readyState==='complete'&&location.pathname==='/phone'&&location.hash===''"),'legacy QR fragment cleared');
+  await browser.wait(()=>browser.evaluate("!!document.querySelector('input[aria-label=\"访问码\"]')"),'new phone requires code despite old QR ticket');
+  await browser.evaluate("document.querySelector('input[aria-label=\"访问码\"]').value='345678';document.querySelector('form.auth').requestSubmit()");
+  await browser.wait(()=>browser.evaluate("document.body.textContent.includes('访问码不对')"),'wrong code denied');assert.equal((await service.fixture({})).authorized,false);
+  shots.push(await browser.shot('phone-wrong-access-code'));
+  await browser.evaluate("document.querySelector('input[aria-label=\"访问码\"]').value='234567';document.querySelector('form.auth').requestSubmit()");
+  await browser.wait(()=>browser.evaluate("!document.querySelector('form.auth')"),'new phone verifies existing receiver code');
+  await service.fixture({accessSetup:true,auth:false});await browser.goto(service.origin+'/phone');
+  await browser.wait(()=>browser.evaluate("!!document.querySelector('input[aria-label=\"确认访问码\"]')"),'phone first-use setup');
+  shots.push(await browser.shot('phone-first-access-code'));
+  await browser.evaluate("document.querySelector('input[aria-label=\"设置访问码\"]').value='456789';document.querySelector('input[aria-label=\"确认访问码\"]').value='456789';document.querySelector('form.auth').requestSubmit()");
+  await browser.wait(()=>browser.evaluate("!document.querySelector('form.auth')"),'phone first code saved');
+  await service.fixture({accessSetup:true,auth:false});await browser.viewport(800,480);await browser.goto(service.origin+'/car');
+  await browser.wait(()=>browser.evaluate("document.querySelector('#token-title').textContent==='首次设置访问码'"),'fresh receiver for cookie failure');
+  await browser.evaluate(`window.setupPosts=0;const original=window.fetch;window.fetch=async(url,init)=>{const r=await original(url,init);if(url==='/api/auth/setup'){setupPosts++;await original('/__fixture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:false})});}return r;}`);
+  await press('567890');await press('567890');
+  await browser.wait(()=>browser.evaluate("document.querySelector('#token-msg').textContent.includes('浏览器未保存授权')"),'setup succeeded but cookie missing');
+  assert.equal(await browser.evaluate("document.querySelector('#token-title').textContent"),'输入访问码');
+  await press('567890');await browser.wait(()=>browser.evaluate("document.querySelector('#token-layer').hidden"),'retry uses saved code immediately');
+  assert.equal(await browser.evaluate('setupPosts'),1);
+  assert.deepEqual(browser.errors,[]);
+  console.log(JSON.stringify({passed:true,checks:['car first setup','confirmation mismatch','remembered browser','new phone rejects QR bypass','wrong code rejected','same receiver code on new phone','phone first setup','saved code survives missing cookie and immediate retry'],shots}));
+} finally {await browser.close();await service.close();}

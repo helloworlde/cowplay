@@ -244,8 +244,8 @@ pub fn from_dashplay(source: &Path, destination: &Path) -> crate::RuntimeResult<
         )?;
         write(&stage.join("tls.pem"), &bytes(&certificate, 32768)?)?;
         write(&stage.join("tls.key"), &bytes(&private_key, 16384)?)?;
-        let token = f50_server::clients::random_token()?;
-        write(&stage.join("access-token"), token.as_bytes())?;
+        let token = "";
+        write(&stage.join("access-token"), f50_server::clients::SETUP_REQUIRED.as_bytes())?;
         copy_tree(&source.join("state/bluetooth"), &stage.join("bluetooth"), 0)?;
         let mut phone = old["bluetoothDeviceAddress"].as_str().map(str::to_owned);
         if phone.is_none() {

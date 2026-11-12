@@ -14,6 +14,7 @@ async fn main() -> cowplay::RuntimeResult<()> {
     });
     let args: Vec<_> = std::env::args().collect();
     match args.get(1).map(String::as_str){
+        Some("init-access")=>{let dir=Path::new(args.get(2).ok_or("init-access NEW_STATE_DIR required")?);board::private_dir(dir)?;f50_server::clients::Clients::initialize(dir)?;println!("首次访问设置已就绪；请在 CowPlay 页面设置访问码");},
         Some("probe")=>{probe(args.get(2).map(String::as_str))?;},
         #[cfg(feature = "tesla")]
         Some("tesla-keygen")=>{

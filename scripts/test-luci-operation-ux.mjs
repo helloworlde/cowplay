@@ -11,7 +11,7 @@ const calls = () => fetch(luci.origin + '/__calls').then(r => r.json());
 const fixture = value => fetch(luci.origin + '/__fixture', {method: 'POST', body: JSON.stringify(value)});
 const writes = async () => (await calls()).filter(c => c.object === 'uci' && ['set', 'apply', 'commit'].includes(c.method) || ['reload', 'network_prepare', 'network_commit'].includes(c.method)).length;
 let openSequence = 0;
-const open = async page => { await b.goto(luci.origin + '/luci?' + openSequence++ + '#' + page); await b.wait(() => b.evaluate("!!document.querySelector('.cw-tabs')"), 'LuCI loaded'); };
+const open = async page => { await b.goto(luci.origin + '/luci?' + openSequence++ + '#' + page); await b.wait(() => b.evaluate("(async()=>!!document.querySelector('.cw-tabs') && document.querySelector('[data-cw-updater]')?.textContent.includes('example/cowplay') && (await L.require('view.cowplay.main')).updateBusy===false)()"), 'LuCI status ready'); };
 const click = text => b.evaluate(`(()=>{const e=[...document.querySelectorAll('button')].find(e=>e.offsetParent!==null&&e.textContent===${JSON.stringify(text)});if(!e||e.disabled)throw Error('button unavailable: '+${JSON.stringify(text)});e.click()})()`);
 const dialog = () => b.wait(() => b.evaluate("document.body.classList.contains('modal-overlay-active') && !!document.querySelector('.cw-operation-confirmation')"), 'explicit confirmation');
 const noDialog = () => b.wait(() => b.evaluate("!document.body.classList.contains('modal-overlay-active')"), 'cancelled confirmation');
@@ -87,6 +87,27 @@ try {
     assert.equal(await b.evaluate("document.querySelector('.cw-footer').textContent.includes('✓ 配置已应用')"), false); await fixture({rpcErrors: {}});
     checks.push('a failed core reload never reports applied success');
 
+    await runningCase('access code changes require confirmation, reject invalid drafts and persist the chosen code', async () => {
+        await open('devices');
+        const sent = async () => (await calls()).filter(c => c.method === 'token_set');
+        await b.evaluate("document.querySelector('input[aria-label=\"新访问码\"]').value='234567'");
+        await click('修改访问码'); await luciConfirmation(b, 'cancel');
+        assert.equal((await sent()).length, 0);
+        assert.equal(await b.evaluate("document.querySelector('input[aria-label=\"新访问码\"]').value"), '234567');
+        await b.evaluate("document.querySelector('input[aria-label=\"新访问码\"]').value='123'");
+        await click('修改访问码'); await luciConfirmation(b);
+        await b.wait(() => b.evaluate("document.body.innerText.includes('操作未完成：请输入六位数字访问码')"), 'invalid code feedback');
+        assert.equal((await sent()).length, 0);
+        await b.evaluate("document.querySelector('input[aria-label=\"新访问码\"]').value='234567'");
+        await click('修改访问码'); await luciConfirmation(b);
+        await b.wait(async () => (await sent()).length === 1, 'one code change');
+        assert.equal((await sent())[0].args.token, '234567');
+        await b.wait(() => b.evaluate("document.querySelector('input[aria-label=\"新访问码\"]').value==='' && !document.querySelector('input[aria-label=\"新访问码\"]').disabled"), 'saved code clears private draft');
+        await click('显示令牌');
+        await b.wait(() => b.evaluate("document.querySelector('[data-page=devices] code').textContent==='234567'"), 'management sees saved code');
+        await click('重置令牌'); await luciConfirmation(b);
+        await b.wait(() => b.evaluate("document.querySelector('[data-page=devices] code').textContent==='654321'"), 'management resets code');
+    });
     await runningCase('hiding a pending token and concurrent reset/show replies respect their own display snapshots', async () => {
         await open('devices');
         await b.evaluate("(async()=>{const cp=await L.require('cowplay.rpc'),original=cp.call.bind(cp);window.__tokenReads=[];window.__tokenResets=[];cp.call=(method,...args)=>method==='token'?new Promise(resolve=>window.__tokenReads.push(value=>resolve({token:value}))):method==='token_reset'?new Promise(resolve=>window.__tokenResets.push(value=>resolve({token:value}))):original(method,...args)})()");

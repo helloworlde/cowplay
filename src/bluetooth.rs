@@ -1533,7 +1533,7 @@ pub(crate) mod recovery_tests {
         Arc::get_mut(&mut manager).unwrap().phone_file=dir.path().join("phone");
         f50_server::settings::write_private(&manager.phone_file,PHONE.as_bytes()).unwrap();
         let phones=f50_server::phones::Phones::new(None,None);phones.initialize(Some(PHONE)).unwrap();
-        let (hub,_commands)=f50_server::Hub::with_phones("synthetic".into(),"https://test.invalid".into(),phones);
+        let (hub,_commands)=f50_server::Hub::with_phones("123456".into(),"https://test.invalid".into(),phones);
         (manager,server,a,b,hub,dir)
     }
     #[tokio::test]

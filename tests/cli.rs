@@ -57,3 +57,16 @@ fn invalid_management_configuration_fails_before_bluetooth_and_identity_setup() 
     assert!(String::from_utf8_lossy(&result.stderr).contains("management token"));
     assert!(!dir.path().join("untouched-state").exists());
 }
+
+#[test]
+fn access_initialization_is_explicit_private_and_never_overwrites() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir=tempfile::tempdir().unwrap();let state=dir.path().join("new-state");
+    let first=Command::new(env!("CARGO_BIN_EXE_cowplay")).arg("init-access").arg(&state).output().unwrap();
+    assert!(first.status.success(),"{}",String::from_utf8_lossy(&first.stderr));
+    let file=state.join("access-token");assert_eq!(fs::read_to_string(&file).unwrap(),"setup-required");
+    assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o777,0o600);
+    fs::write(&file,"234567").unwrap();
+    let again=Command::new(env!("CARGO_BIN_EXE_cowplay")).arg("init-access").arg(&state).output().unwrap();
+    assert!(!again.status.success());assert_eq!(fs::read_to_string(&file).unwrap(),"234567");
+}

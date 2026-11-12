@@ -7,7 +7,7 @@
       "origin": "https://your-host.example:18443",
       "tls_certificate": "/etc/cowplay/state/web-chain.pem",
       "tls_private_key": "/etc/cowplay/state/web-key.pem",
-      "access_token": "REPLACE_WITH_YOUR_ACCESS_TOKEN"
+      "access_token": ""
     },
     "control_bind": "192.0.2.1:7000",
     "pairing_id": "YOUR_EXISTING_ACCESSORY_ID",

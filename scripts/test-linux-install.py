@@ -20,7 +20,7 @@ def executable(path, body, python=False):
     path.chmod(0o755)
 
 
-for case in ['fresh', 'upgrade_running_enabled', 'upgrade_running_disabled', 'upgrade_stopped', 'same_version', 'downgrade', 'incompatible', 'custom_unit', 'dropin', 'stop_failure', 'stop_timeout', 'backup_failure', 'start_failure', 'disk_full', 'wrong_arch', 'unmanaged', 'locked', 'manual', 'interrupted', 'query_failure', 'bad_stage_root']:
+for case in ['fresh', 'fresh_empty_state', 'upgrade_running_enabled', 'upgrade_running_disabled', 'upgrade_stopped', 'same_version', 'downgrade', 'incompatible', 'custom_unit', 'dropin', 'stop_failure', 'stop_timeout', 'backup_failure', 'start_failure', 'disk_full', 'wrong_arch', 'unmanaged', 'locked', 'manual', 'interrupted', 'query_failure', 'bad_stage_root']:
     with tempfile.TemporaryDirectory(prefix='linux-install-', dir=project / 'target') as raw:
         temp = Path(raw)
         root, package, tools = temp / 'root', temp / 'package', temp / 'tools'
@@ -32,7 +32,7 @@ for case in ['fresh', 'upgrade_running_enabled', 'upgrade_running_disabled', 'up
         for name in files:
             if not (package / name).exists():
                 (package / name).write_text('synthetic package ' + name)
-        executable(package / 'cowplay', 'test "$1" = verify-image\n')
+        executable(package / 'cowplay', 'if [ "$1" = init-access ]; then test -d "$2" && touch "$2/.synthetic-init-called"; else test "$1" = verify-image; fi\n')
         installer = (project / 'packaging/linux/install.sh').read_text()
         installer = installer.replace('root=${DESTDIR:-}', 'root=' + repr(str(root)))
         # Keep the actual service path, but put every filesystem target under the fixture.
@@ -46,11 +46,12 @@ for case in ['fresh', 'upgrade_running_enabled', 'upgrade_running_disabled', 'up
         config.write_bytes(b'SYNTHETIC CONFIG WITH PRIVATE PLACEHOLDERS')
         state.write_bytes(b'SYNTHETIC PAIRING AND CERTIFICATE PLACEHOLDERS')
         before = (config.read_bytes(), state.read_bytes())
+        if case=='fresh_empty_state':state.unlink();state.parent.rmdir()
         binary = root / 'usr/local/bin/cowplay'
         base = root / 'usr/local/lib/cowplay'
         unit = root / 'etc/systemd/system/cowplay.service'
         old = '0.3.15-r0' if case == 'downgrade' else version if case in ['same_version','interrupted'] else '0.3.14-r16'
-        upgraded = case not in ['fresh', 'wrong_arch', 'unmanaged', 'locked', 'query_failure', 'bad_stage_root']
+        upgraded = case not in ['fresh', 'fresh_empty_state', 'wrong_arch', 'unmanaged', 'locked', 'query_failure', 'bad_stage_root']
         if upgraded:
             previous = base / 'releases' / old
             previous.mkdir(parents=True)
@@ -113,9 +114,11 @@ else:shutil.move(paths[0],paths[1])
             (package/'install.sh').write_text((project/'packaging/linux/install.sh').read_text());env['DESTDIR']='/'
         result=subprocess.run(['/bin/sh',package/'install.sh']+(['--no-systemd'] if case=='manual' else []),env=env,capture_output=True,text=True,timeout=20)
         if held:held.close()
-        good=case in ['fresh','upgrade_running_enabled','upgrade_running_disabled','upgrade_stopped','same_version','manual']
+        good=case in ['fresh','fresh_empty_state','upgrade_running_enabled','upgrade_running_disabled','upgrade_stopped','same_version','manual']
         assert (result.returncode==0)==good,(case,result.stdout,result.stderr)
-        assert (config.read_bytes(),state.read_bytes())==before,case
+        if case=='fresh_empty_state':
+            assert config.read_bytes()==before[0] and (state.parent/'.synthetic-init-called').is_file()
+        else:assert (config.read_bytes(),state.read_bytes())==before,case
         after=json.loads((temp/'service.json').read_text())
         assert after['boot']==service['boot'],case
         events=(temp/'events').read_text() if (temp/'events').exists() else ''
@@ -124,7 +127,7 @@ else:shutil.move(paths[0],paths[1])
             assert os.readlink(base/'current')=='releases/'+version
             assert (base.stat().st_mode & 0o777)==0o755,case
             assert after['active']==service['active'],case
-            if case in ['fresh','upgrade_stopped','same_version','manual']:assert 'start cowplay' not in events,case
+            if case in ['fresh','fresh_empty_state','upgrade_stopped','same_version','manual']:assert 'start cowplay' not in events,case
             if case.startswith('upgrade_running'):assert events.index('stop cowplay')<events.index('start cowplay'),case
         elif case=='start_failure':
             assert os.readlink(base/'current')=='releases/'+version

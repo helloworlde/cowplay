@@ -474,7 +474,7 @@ mod tests {
     use std::sync::atomic::Ordering;
     async fn display_fixture() -> (Arc<Admin>, zbus::Connection, tokio::sync::mpsc::Receiver<f50_server::Control>, tempfile::TempDir) {
         let (manager, server, old, dir) = crate::bluetooth::recovery_tests::admin_fixture().await;
-        let (hub, commands) = f50_server::Hub::with_phones("synthetic".into(), "https://test.invalid".into(), old.phones.clone());
+        let (hub, commands) = f50_server::Hub::with_phones("123456".into(), "https://test.invalid".into(), old.phones.clone());
         let a = Admin::new(manager,hub.clone(),"https://test.invalid".into(),dir.path().join("cowplay.uci"),dir.path().join("config"),dir.path().to_owned(),"cert".into(),"key".into(),"127.0.0.1:8080".parse().unwrap(),"127.0.0.1:7000".parse().unwrap(),None,(800,480)).expect("valid synthetic policy");
         let selected = hub.phones.snapshot();
         assert!(hub.phones.handoff(selected.epoch,selected.device.as_deref().unwrap()));
