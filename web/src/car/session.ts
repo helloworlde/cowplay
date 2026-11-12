@@ -167,7 +167,7 @@ export function renderSheet(a: SessionActions): void {
   clear($('sheet-toggles'),
     switchRow('trow', 'CarPlay 夜间外观', '深色地图与界面', p.night, () => a.setPrefs({night: !p.night})));
   clear($('sheet-call'),
-    switchRow('trow', '用这块屏幕的麦克风', '关闭时通话走车机蓝牙；变更会重连', p.call === 'web', () => a.setPrefs({call: p.call === 'web' ? 'bt' : 'web'})));
+    switchRow('trow', '用这块屏幕的麦克风', '只控制屏幕采音，音乐播放独立；变更会重连', p.call === 'web', () => a.setPrefs({call: p.call === 'web' ? 'bt' : 'web'})));
   clear($('sheet-debug'),
     switchRow('trow', '调试信息', '右上角显示画面、车机、接收端、iPhone 数据', p.debug, () => a.setPrefs({debug: !p.debug})));
     for(const button of $('sheet').querySelectorAll<HTMLButtonElement>('[role=switch]'))button.disabled=app.prefsSaving;

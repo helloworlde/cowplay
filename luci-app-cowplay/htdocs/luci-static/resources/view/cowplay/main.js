@@ -160,7 +160,7 @@ return view.extend({
     displayForm: function() {
         var m = this.map(), d = this.formSection(m, 'screen', 'defaults', '新屏幕默认值'), s, caps=(this.data.display_limits||{}).receiver;
         this.option(d, 'list', 'quality', '画质', [['auto', '自动'], ['smooth', '流畅 · 30 帧'], ['sharp', '清晰']]);
-        this.option(d, 'list', 'call', '通话与 Siri', [['bt', '车机蓝牙'], ['web', '屏幕麦克风']]);
+        this.option(d, 'list', 'call', '通话与 Siri', [['bt', '不使用屏幕麦克风'], ['web', '屏幕麦克风']]);
         this.option(d, 'list', 'rail_side', '控制栏位置', [['left', '左侧'], ['right', '右侧']]);
         s = this.formSection(m, 'main', 'cowplay', '向 iPhone 请求的参数');
         var aliases = caps && caps.resolution_aliases || {}, choices = ['720p', '1080p', '1440p', '2160p'].filter(function(k) { return aliases[k]; }).map(function(k) { return [k, (k === '2160p' ? '4K' : k) + ' · ' + aliases[k].replace('x', '×')]; });

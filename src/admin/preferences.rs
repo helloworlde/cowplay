@@ -37,7 +37,7 @@ impl Default for DdnsPrefs {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AudioPrefs {
-    /// car_bt: calls/Siri on the car's own Bluetooth (Tesla split) | browser: car browser mic
+    /// car_bt: legacy name for no browser microphone | browser: car browser mic
     pub voice_route: String,
 }
 impl Default for AudioPrefs {

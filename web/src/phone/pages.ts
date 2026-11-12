@@ -36,7 +36,7 @@ export function status(a: Actions): Node[] {
     label('车机屏幕'), group(button('刷新车机页面', () => void a.cmd('reloadCar')), s.stopped ? null : button('断开 CarPlay', () => void a.cmd('disconnect'))),
     foot(s.hub.phone ? '画面持续不更新时可尝试重连；没有声音时先检查播放状态、音量与输出设备。重连保留配对。' : '断开后车机不会自动重连，直到这里或车机上选择连接。'), label('快速设置'), group(
       h('div', {class: 'row quick-quality'}, h('span', {class: 'grow'}, '画质'), p ? segment('画质', qualities, p.quality, v => {if(v==='custom'){app.pref='quality';app.sheet='prefs';a.render();}else void a.prefs({quality:v});}) : h('span', {class: 'value'}, '等待车机屏幕')),
-      p ? toggle('车机显示调试信息', p.debug, () => void a.prefs({debug: !p.debug})) : row('车机显示调试信息', '—'), row('通话', p ? p.call === 'bt' ? '车机蓝牙' : '车机屏幕麦克风' : '—'))];
+      p ? toggle('车机显示调试信息', p.debug, () => void a.prefs({debug: !p.debug})) : row('车机显示调试信息', '—'), row('通话', p ? p.call === 'bt' ? '不使用屏幕麦克风' : '车机屏幕麦克风' : '—'))];
 }
 
 /** A saved phone can be explicitly called even when its Bluetooth link is offline. */
@@ -79,7 +79,7 @@ export function logs(a: Actions): Node[] {
 export function settings(a: Actions): Node[] {
   const s = app.state!, p = prefs();
   const pref = (key: typeof app.pref, title: string, value: string) => h('button', {type: 'button', id: `phone-pref-${key}`, class: 'row', disabled: !p, onclick: () => { app.pref = key; app.sheet = 'prefs'; a.render(); }}, h('span', {class: 'grow'}, title), h('span', {class: 'value'}, value, icon('right', 16)));
-  return [label('投屏'), group(pref('quality', '画质', p ? qNames[p.quality] : '—'), pref('call', '通话与 Siri', p ? p.call === 'bt' ? '车机蓝牙' : '屏幕麦克风' : '—'), pref('rail_side', '控制栏位置', p ? p.rail_side === 'left' ? '左侧' : '右侧' : '—')),
+  return [label('投屏'), group(pref('quality', '画质', p ? qNames[p.quality] : '—'), pref('call', '通话与 Siri', p ? p.call === 'bt' ? '不使用屏幕麦克风' : '屏幕麦克风' : '—'), pref('rail_side', '控制栏位置', p ? p.rail_side === 'left' ? '左侧' : '右侧' : '—')),
     foot('投屏偏好跟随当前车机屏幕，和车机“设置”里是同一份。'),
     group(row('访问令牌', app.showToken && app.token ? app.token : '••••••', true), h('button', {type:'button',class:'row blue',disabled:app.tokenBusy,onclick:a.token}, app.tokenBusy ? '正在读取令牌…' : app.showToken ? '隐藏令牌' : '显示令牌')), foot('访问码可选：开启后新浏览器验证一次，未启用时可直接进入。开启、修改或停用请到管理页。'),
     label('由管理页负责（只读）'), group(row('CarPlay 热点', s.network.ssid ?? '—'), row('访问地址', s.network.host, true), h('div', {class: 'row'}, h('span', {class: 'grow'}, 'HTTPS 证书'), h('span', {class: `value${s.network.cert_days == null ? '' : s.network.cert_days >= 0 ? ' green' : ' red'}`}, s.network.cert_days == null ? '—' : s.network.cert_days === 0 ? '有效 · 不足 1 天' : s.network.cert_days > 0 ? `有效 · 剩 ${s.network.cert_days} 天` : '已过期')), row('DDNS', s.network.ddns.enabled ? s.network.ddns.ok === false ? '更新失败' : s.network.ddns.ok ? '已更新' : '等待更新' : '未启用')),

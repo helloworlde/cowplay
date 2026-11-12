@@ -23,7 +23,7 @@ export function confirmAction(options:Confirmation):Promise<boolean>{
  });
 }
 const names:Record<string,string>={quality:'画质方案',resolution:'分辨率',fps:'帧率上限',codec:'视频编码',ui_size:'CarPlay 控件大小',right_hand_drive:'CarPlay 驾驶位',call:'通话与 Siri'};
-const labels:Record<string,string>={auto:'自动',smooth:'流畅',sharp:'清晰',custom:'自定义',native:'跟随屏幕','1.5x':'屏幕 1.5 倍','2160p':'4K',h264:'H.264',hevc:'H.265 优先',small:'小',std:'标准',large:'大',bt:'车机蓝牙',web:'这块屏幕的麦克风',true:'右舵',false:'左舵'};
+const labels:Record<string,string>={auto:'自动',smooth:'流畅',sharp:'清晰',custom:'自定义',native:'跟随屏幕','1.5x':'屏幕 1.5 倍','2160p':'4K',h264:'H.264',hevc:'H.265 优先',small:'小',std:'标准',large:'大',bt:'不使用屏幕麦克风',web:'这块屏幕的麦克风',true:'右舵',false:'左舵'};
 export function preferenceChanges(before:ScreenPrefs,patch:Partial<ScreenPrefs>):string[]{
  return Object.keys(names).filter(key=>key in patch&&patch[key as keyof ScreenPrefs]!==before[key as keyof ScreenPrefs]).map(key=>{
   const value=String(patch[key as keyof ScreenPrefs]);return `${names[key]}：${key==='fps'?value+' 帧/秒':labels[value]??value.replace('x','×')}`;

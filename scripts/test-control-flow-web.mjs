@@ -154,7 +154,7 @@ await scenario('switch-held-across-state-poll',async({b,fixture,frame,controls})
 });
 
 await scenario('saving-does-not-silently-drop-switch',async({b,fixture,frame,click,select,controls})=>{
-  await controls();await fixture({prefsHold:true});await select('#sheet-picture-resolution','1440p',false);
+  await controls();await fixture({prefsHold:true});await select('#sheet-picture-resolution','2560x1440',false);
   await b.wait(async()=>(await fixture({})).pendingPrefs===1,'save request held by the service');
   await b.wait(()=>b.evaluate("document.querySelector('#sheet-picture-resolution').disabled"),'save pending');
   const disabled=await b.evaluate("document.querySelector('#sheet-toggles button').disabled");
@@ -317,10 +317,10 @@ await scenario('saved-phones-switch-a-b-a',async({b,fixture,click,controls})=>{
 });
 
 await scenario('independent-settings-survive-reload',async({b,origin,fixture,select,controls})=>{
-  await controls();await select('#sheet-picture-resolution','1.5x');await select('#sheet-picture-fps','30');
+  await controls();await select('#sheet-picture-resolution','1920x1080');await select('#sheet-picture-fps','30');
   await fixture({prefsPatch:{rail_side:'right'}});await b.goto(origin+'/car?persisted');
   await b.wait(()=>b.evaluate("document.body.dataset.view==='session'&&document.body.dataset.side==='right'"),'saved settings on reload');
-  await controls();assert.equal(await b.evaluate("document.querySelector('#sheet-picture-resolution').value"),'1.5x');
+  await controls();assert.equal(await b.evaluate("document.querySelector('#sheet-picture-resolution').value"),'1920x1080');
   assert.equal(await b.evaluate("document.querySelector('#sheet-picture-fps').value"),'30');
 });
 

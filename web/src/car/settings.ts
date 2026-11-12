@@ -38,7 +38,7 @@ export function renderTabs(): void {
   const online = (s?.phones ?? []).filter(x => x.online).length;
   const defs: [Tab, string, string, string, string, string?][] = [
     ['pic', '画面', '▣', '#0A84FF', p ? QN[p.quality] : ''],
-    ['audio', '通话与声音', '♪', '#30D158', p ? (p.call === 'bt' ? '车机蓝牙' : '屏幕麦克风') : ''],
+    ['audio', '通话与声音', '♪', '#30D158', p ? (p.call === 'bt' ? '不使用屏幕麦克风' : '屏幕麦克风') : ''],
     ['display', '显示', 'Aa', '#5E5CE6', p ? (p.rail_side === 'left' ? '左侧' : '右侧') : ''],
     ['phones', 'iPhone', '▯', '#0A84FF', s?.phones ? `${online} 台在线` : ''],
     ['devices', '设备信息', 'i', '#8E8E93', ''],
@@ -83,9 +83,9 @@ export function renderPane(a: SettingsActions): void {
       break;
     case 'audio':
       body.push(group(
-        radio('车机蓝牙（推荐）', '车自带的麦克风和扬声器', p.call === 'bt', () => a.setPrefs({call: 'bt'})),
+        radio('不使用屏幕麦克风', '音乐仍从屏幕播放；通话输入由 iPhone 选择', p.call === 'bt', () => a.setPrefs({call: 'bt'})),
         radio('这块屏幕的麦克风', '需要 HTTPS · 切换后 iPhone 重新连接', p.call === 'web', () => a.setPrefs({call: 'web'}))));
-      body.push(foot('切换通话路线会重连 iPhone，配对保留。屏幕麦克风需浏览器授权，实际通话路线以现场为准。'));
+      body.push(foot('音乐从屏幕播放，与麦克风选择独立。通话和 Siri 的输入可在 iPhone 选择；系统是否允许分开路由以实际情况为准。更改会重连，配对保留。'));
       body.push(a.audioControls());
       if (loc.audio) body.push(group(h('div', {class: 'row'}, h('span', {class: 't'}, '音乐与导航声音'), h('span', {class: 'val'}, `这块屏幕 · ${Math.round(loc.audio.rate / 1000)} kHz ${loc.audio.channels >= 2 ? '立体声' : '单声道'}`))));
       break;
@@ -161,7 +161,7 @@ function devices(a: SettingsActions): HTMLElement[] {
     phone: ['iP', cur?.name ?? 'iPhone', s.hub.phone ? `CarPlay 会话 · ${s.session ? minutes((s.now_ms - s.session.started_ms) / 1000) : ''}` : '未连接', s.hub.phone ? '会话已建立' : '会话未建立', phoneState, [
       ['型号 · 系统', phoneModel(st)], ['地址', st?.phone.ip ?? '—', 1], ['Wi‑Fi 信号', phoneWifi(st), 1],
       ['蓝牙', cur?.bt ?? '—', 1], ['画面', s.spec && s.hub.phone ? `${s.spec.width}×${s.spec.height} @ ${s.spec.fps}` : '—', 1],
-      ['码率', st && s.hub.video ? `${(st.server.bitrate_bps / 1e6).toFixed(1)} Mbps` : '—', 1], ['通话', (s.viewer?.prefs.call ?? s.me.prefs.call) === 'web' ? '车机屏幕麦克风' : '车机蓝牙'], ['首选', cur?.preferred ? '是' : '否']]],
+      ['码率', st && s.hub.video ? `${(st.server.bitrate_bps / 1e6).toFixed(1)} Mbps` : '—', 1], ['通话', (s.viewer?.prefs.call ?? s.me.prefs.call) === 'web' ? '车机屏幕麦克风' : '不使用屏幕麦克风'], ['首选', cur?.preferred ? '是' : '否']]],
   } as const;
   const tabDot = {car: s.me.viewing ? '#30D158' : '#636366', f50: '#30D158', phone: s.hub.phone ? '#30D158' : '#636366'};
   const dv = devs[app.devTab];

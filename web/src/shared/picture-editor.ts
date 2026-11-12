@@ -4,6 +4,7 @@ import './picture-editor.css';
 
 const keys = ['quality','resolution','fps','codec','ui_size','right_hand_drive'] as const;
 const aliases: Record<string,[number,number]> = {'720p':[1280,720],'1080p':[1920,1080],'1440p':[2560,1440],'2160p':[3840,2160]};
+const resolutions:[string,string][]=[['native','跟随屏幕'],['800x480','800×480'],['1280x720','1280×720'],['1920x720','1920×720 · 超宽'],['1920x1080','1920×1080'],['2560x1440','2560×1440'],['3840x2160','3840×2160'],['720x1280','720×1280 · 竖屏'],['1080x1920','1080×1920 · 竖屏'],['custom','自定义宽高…']];
 const exact=(v:string):[number,number]|null=>v!=='1.5x'&&v.split('x').length===2?v.split('x').map(Number) as [number,number]:null;
 export function wantedPicture(p:ScreenPrefs,rw:number,rh:number,dpr:number,cap:string,maxFps:number,bounds?:DisplayLimits['receiver']):Spec|null {
  const scale=p.quality==='sharp'||(p.quality==='custom'&&p.resolution==='1.5x')?1.5:1;
@@ -24,13 +25,13 @@ export interface PictureContext {
 /** One draft per target screen. Polling cannot save it or move it onto a different screen. */
 export class PictureEditor {
  private owner=''; private base=''; private draft:ScreenPrefs|null=null; private notice='';
- private saving=false; private generation=0; private advancedOpen=false;
- reset():void{this.owner='';this.base='';this.draft=null;this.notice='';this.saving=false;this.advancedOpen=false;this.generation++;}
+ private saving=false; private generation=0; private advancedOpen=false; private manualDimensions=false;
+ reset():void{this.owner='';this.base='';this.draft=null;this.notice='';this.saving=false;this.advancedOpen=false;this.manualDimensions=false;this.generation++;}
  private signature(p:ScreenPrefs):string{return JSON.stringify(keys.map(k=>p[k]??false));}
  private sync(c:PictureContext):ScreenPrefs {
   const signature=this.signature(c.prefs);
   if(this.owner!==c.owner){this.reset();this.owner=c.owner;this.base=signature;}
-  else if(signature!==this.base&&!this.saving){if(this.draft)this.notice='画面设置已在其他页面更新，请重新调整。';this.draft=null;this.base=signature;}
+  else if(signature!==this.base&&!this.saving){if(this.draft)this.notice='画面设置已在其他页面更新，请重新调整。';this.draft=null;this.manualDimensions=false;this.base=signature;}
   return this.draft??c.prefs;
  }
  view(c:PictureContext,prefix:string):HTMLElement {
@@ -40,11 +41,9 @@ export class PictureEditor {
   const custom=(patch:Partial<ScreenPrefs>)=>{const current=this.draft??p;edit({quality:'custom',...(current.quality==='custom'?{}:{resolution:current.quality==='sharp'?'1.5x':'native',fps:current.quality==='smooth'?30:60,codec:'h264'}),...patch});};
   const field=(name:string,title:string,value:string,options:[string,string][],change:(v:string)=>void,disabled=false)=>h('label',{class:'picture-field'},h('span',{},title),
    h('select',{id:`${prefix}-${name}`,'aria-label':title,disabled:busy||disabled,onchange:(e:Event)=>{(e.target as HTMLSelectElement).focus({preventScroll:true});(e.target as HTMLSelectElement).blur();change((e.target as HTMLSelectElement).value);}},
-    ...(!options.some(([v])=>v===value)?[h('option',{value:name==='resolution'?value:'',disabled:name!=='resolution',selected:true},name==='resolution'?`自定义 ${value.replace('x','×')}`:`原设置 ${value}（请重新选择）`)]:[]),...options.map(([v,t])=>h('option',{value:v,selected:v===value},t))));
-  const options:[string,string][]=[['native','跟随屏幕'],['1.5x','屏幕 1.5 倍'],
-   ...Object.entries(aliases).filter(([k])=>caps?.resolution_aliases[k]).map(([k])=>[k,`${k==='2160p'?'4K':k} · 按屏幕比例`] as [string,string]),
-   ['800x480','800×480'],['1280x720','1280×720'],['1920x720','1920×720 · 超宽'],['1920x1080','1920×1080'],['720x1280','720×1280 · 竖屏'],['1080x1920','1080×1920 · 竖屏'],['custom','输入宽高…']];
+    ...(!options.some(([v])=>v===value)?[h('option',{value:name==='resolution'?value:'',disabled:true,selected:true},name==='resolution'?`原设置：${value==='1.5x'?'屏幕 1.5 倍':`${value} · 按屏幕比例`}`:`原设置 ${value}（请重新选择）`)]:[]),...options.map(([v,t])=>h('option',{value:v,selected:v===value},t))));
   const dimensions=p.quality==='custom'?exact(p.resolution):null,r=c.window;
+  const manual=!!dimensions&&(this.manualDimensions||!resolutions.some(([v])=>v===p.resolution));
   const wanted=r?wantedPicture(p,r.rw,r.rh,r.dpr,c.maxRes,c.maxFps,caps):dimensions?wantedPicture(p,dimensions[0],dimensions[1],1,c.maxRes,c.maxFps,caps):c.spec;
   const valid=!!caps&&(!dimensions||(!!wanted&&dimensions[0]>=caps.min_width&&dimensions[0]<=caps.max_width&&dimensions[1]>=caps.min_height&&dimensions[1]<=caps.max_height&&dimensions.every(v=>Number.isInteger(v)&&v%caps.dimension_step===0)));
   const submit=async(patch:Partial<ScreenPrefs>)=>{
@@ -64,10 +63,10 @@ export class PictureEditor {
    h('div',{class:'picture-presets',role:'radiogroup','aria-label':'画质档位',onkeydown:radioKeys},...([['auto','自动'],['smooth','流畅'],['sharp','清晰'],['custom','自定义']] as const).map(([v,t])=>h('button',{type:'button',id:`${prefix}-preset-${v}`,role:'radio',tabindex:p.quality===v?0:-1,'aria-checked':String(p.quality===v),disabled:busy,onclick:()=>edit({quality:v,...(v==='custom'?{}:{resolution:v==='sharp'?'1.5x':'native',fps:v==='smooth'?30:60,codec:'h264'})})},t))),
    h('p',{class:'picture-preset-hint'},p.quality==='auto'?'跟随屏幕尺寸，优先兼容':p.quality==='smooth'?'降低帧率，减少设备负载':p.quality==='sharp'?'以屏幕 1.5 倍尺寸请求画面':'分别设置尺寸、帧率与编码'),
    p.quality==='custom'?h('div',{class:'picture-fields'},
-    field('resolution','分辨率',p.quality==='custom'?p.resolution:p.quality==='sharp'?'1.5x':'native',options,v=>custom({resolution:(v==='custom'?`${size[0]}x${size[1]}`:v) as ScreenPrefs['resolution']}),!caps),
+    field('resolution','分辨率',manual?'custom':p.resolution,resolutions,v=>{this.manualDimensions=v==='custom';custom({resolution:(v==='custom'?`${size[0]}x${size[1]}`:v) as ScreenPrefs['resolution']});},!caps),
     field('fps','帧率上限',String(p.quality==='custom'?p.fps:p.quality==='smooth'?30:60),(caps?.frame_rates??[]).filter(v=>v===30||v===60).map(v=>[String(v),`${v} 帧/秒`]),v=>custom({fps:Number(v)}),!caps),
     field('codec','视频编码',p.codec,[['h264','H.264 · 兼容'],...(c.hevc===false?[]:[['hevc','H.265 优先'] as [string,string]])],v=>custom({codec:v as ScreenPrefs['codec']}),!caps),
-    ...(dimensions?[h('div',{class:'picture-dimensions'},...(['宽','高'] as const).map((title,i)=>h('label',{},title+'（px）',h('input',{type:'number',id:`${prefix}-${i?'height':'width'}`,'aria-label':title+'（px）',min:i?caps?.min_height:caps?.min_width,max:i?caps?.max_height:caps?.max_width,step:caps?.dimension_step??2,value:dimensions[i],disabled:busy,onchange:(e:Event)=>{(e.target as HTMLInputElement).blur();const next=[...dimensions];next[i]=Number((e.target as HTMLInputElement).value);custom({resolution:`${next[0]}x${next[1]}`});}}))),
+    ...(manual&&dimensions?[h('div',{class:'picture-dimensions'},...(['宽','高'] as const).map((title,i)=>h('label',{},title+'（px）',h('input',{type:'number',id:`${prefix}-${i?'height':'width'}`,'aria-label':title+'（px）',min:i?caps?.min_height:caps?.min_width,max:i?caps?.max_height:caps?.max_width,step:caps?.dimension_step??2,value:dimensions[i],disabled:busy,onchange:(e:Event)=>{(e.target as HTMLInputElement).blur();const next=[...dimensions];next[i]=Number((e.target as HTMLInputElement).value);custom({resolution:`${next[0]}x${next[1]}`});}}))),
      h('button',{type:'button',class:'picture-text-button',disabled:busy,onclick:()=>custom({resolution:`${dimensions[1]}x${dimensions[0]}`})},'交换宽高'))]:[])):null,
    h('div',{class:'picture-summary',role:'status'},h('span',{},dirty?'待应用画质':'请求画质'),h('strong',{},wanted?`${wanted.width}×${wanted.height} · 最高 ${wanted.fps} 帧 · ${wanted.hevc?'H.265 优先':'H.264'}`:'画面尺寸不可用，请检查宽高和设备上限')),
    dimensions&&wanted&&(wanted.width!==dimensions[0]||wanted.height!==dimensions[1])?h('p',{class:'picture-warning'},`所填 ${dimensions[0]}×${dimensions[1]} 受设备上限限制，将保持比例缩小为 ${wanted.width}×${wanted.height}。`):null,

@@ -247,7 +247,7 @@ function renderOverlay(): void {
       const s=app.state!,target=targetScreen()!;
       modal('画质',[pictureEditor.view({owner:target.id,prefs:p,window:target.window,spec:s.spec,limits:s.display_limits,maxRes:s.policy.max_res,maxFps:s.policy.max_fps,busy:app.prefsBusy,error:app.error,hevc:'remote',save:patch=>actions.prefs(patch,target.id),render},'phone-picture')]);
     }else{
-    const opts: [string, string, string][] = app.pref === 'call' ? [['bt', '车机蓝牙（推荐）', '车自带的麦克风和扬声器'], ['web', '这块屏幕的麦克风', '需要 HTTPS · 切换后 iPhone 重新连接']] : [['left', '左侧', '控制栏靠左'], ['right', '右侧', '控制栏靠右']];
+    const opts: [string, string, string][] = app.pref === 'call' ? [['bt', '不使用屏幕麦克风', '音乐仍从屏幕播放；通话输入由 iPhone 选择'], ['web', '这块屏幕的麦克风', '需要 HTTPS · 切换后 iPhone 重新连接']] : [['left', '左侧', '控制栏靠左'], ['right', '右侧', '控制栏靠右']];
     modal({quality: '画质', call: '通话与 Siri', rail_side: '控制栏位置'}[app.pref], [group(...opts.map(([v, name, sub]) => h('button', {type: 'button', class: 'row', role: 'radio', 'aria-checked': String(p[app.pref] === v), onclick: async () => { if(await actions.prefs({[app.pref]: v}))actions.close(); }}, text(name, sub), h('span', {class: 'blue'}, p[app.pref] === v ? '✓' : ''))))]);
     }
   } else {pictureEditor.reset();clear($('overlay'));}

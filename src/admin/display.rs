@@ -137,6 +137,6 @@ impl Admin {
             }
         }
         if !self.hub.set_display_spec(spec) || (!restart && !live) { return; }
-        self.reinvite(&format!("画面协商为 {}×{}@{}，{}", spec.width, spec.height, spec.fps, if spec.microphone { "通话走车机浏览器麦克风" } else { "通话走车机蓝牙" }));
+        self.reinvite(&format!("画面协商为 {}×{}@{}，{}", spec.width, spec.height, spec.fps, if spec.microphone { "通话走车机浏览器麦克风" } else { "不使用浏览器麦克风" }));
     }
 }
