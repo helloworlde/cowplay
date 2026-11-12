@@ -1,3 +1,4 @@
+import {managementLocation} from '../shared/receiver';
 // Car UI helpers: design icons, scale factor, small controls.
 import {h} from '../shared/dom';
 
@@ -10,6 +11,8 @@ const ICON: Record<string, [string, number, string?]> = {
   full: ['<path d="M15 4h5v5"></path><path d="M9 20H4v-5"></path><path d="M20 4l-6.5 6.5"></path><path d="M4 20l6.5-6.5"></path>', 2],
   control: ['<path d="M4 8h9"></path><path d="M19 8h1"></path><circle cx="16" cy="8" r="2.4" fill="currentColor" stroke="none"></circle><path d="M4 16h1"></path><path d="M11 16h9"></path><circle cx="8" cy="16" r="2.4" fill="currentColor" stroke="none"></circle>', 2],
   home: ['<rect x="3" y="3" width="6" height="6" rx="1.4"></rect><rect x="15" y="3" width="6" height="6" rx="1.4"></rect><rect x="3" y="15" width="6" height="6" rx="1.4"></rect><rect x="15" y="15" width="6" height="6" rx="1.4"></rect>', 1.8],
+  siri: ['<rect x="9" y="2" width="6" height="13" rx="3"></rect><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"></path>', 1.8],
+  back: ['<path d="M10 5l-7 7 7 7M3 12h18"></path>', 2],
   reconnect: ['<path d="M20 12a8 8 0 1 1-2.34-5.66"></path><path d="M20 4v5h-5"></path>', 2.2],
   'chev-right': ['<polyline points="9 18 15 12 9 6"></polyline>', 2.2],
   'chev-left': ['<polyline points="15 18 9 12 15 6"></polyline>', 2.2],
@@ -34,11 +37,12 @@ export function hydrateIcons(root: ParentNode = document): void {
 
 /** Open LuCI separately so returning to the running projection does not reload it. */
 export function renderManagementEntry(el: HTMLElement, url: string | null, platform?: string): void {
-  if (el.dataset.url === (url ?? '')) return;
-  el.dataset.url = url ?? '';
+  const key = `${url ?? ''}/${platform ?? ''}`;
+  if (el.dataset.url === key) return;
+  el.dataset.url = key;
   el.replaceChildren(url
     ? h('a', {href: url, target: '_blank', rel: 'noopener noreferrer'}, '管理页 ↗', h('small', {}, platform === 'linux' ? '画面上限、证书与访问令牌' : 'Wi‑Fi、证书、DDNS、令牌与服务'))
-    : h('span', {}, '管理页地址未知：OpenWrt › 服务 › CowPlay'));
+    : h('span', {}, `管理页地址未知：${managementLocation(platform)}`));
 }
 
 /** k = clamp(min(W/1280, H/720), 0.72, 1.3); compact below 560 px height. */

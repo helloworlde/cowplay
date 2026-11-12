@@ -1,3 +1,4 @@
+import {receiverName, receiverPlatform, receiverDevice} from '../shared/receiver';
 import {h, icon} from '../shared/dom';
 import {displaySupport} from '../shared/display-limits';
 import {diagnosticMeasurements, diagnosticReadings} from '../shared/diagnostics';
@@ -17,24 +18,24 @@ export function status(a: Actions): Node[] {
     : err ? err.title : s.hub.phone ? 'iPhone 已连接，等待车机显示画面。' : linkBusy(s) ? `正在连接 ${target?.name ?? 'iPhone'}…` : list.length ? '尚未连接 iPhone，可以在下方连接或切换。' : '还没有配对的 iPhone，先在“iPhone”里添加。';
   const nodes = [
     ['车', '车机', s.viewer?.name ?? '尚未连接', !!s.hub.viewer],
-    ['F50', 'F50', `${num(st?.f50.cpu, 0, '%')} · ${num(st?.f50.temp, 0, '°C')}`, true],
+    ['主机', receiverDevice(s), `${num(st?.f50.cpu, 0, '%')} · ${num(st?.f50.temp, 0, '°C')}`, true],
     ['iP', target?.name ?? 'iPhone', s.hub.phone ? 'CarPlay 已连接' : s.stopped ? '已断开' : s.link.bluetooth_detail || '未连接', !!s.hub.phone],
   ] as const;
   const chain = h('div', {class: 'chain'});
-  nodes.forEach(([abbr, name, sub, ok], i) => {
-    chain.append(h('div', {class: 'node'}, h('span', {class: `node-icon ${ok ? 'ok' : 'idle'}`}, abbr), h('b', {title: name}, name), h('small', {title: sub}, sub)));
+  nodes.forEach(([, name, sub, ok], i) => {
+    chain.append(h('div', {class: `node${i === 1 ? ' receiver-node' : ''}`}, h('span', {class: `node-icon ${ok ? 'ok' : 'idle'}`}, icon(i===0?'monitor':i===1?'link':'phone',22)), h('b', {title: name}, name), h('small', {title: sub}, sub)));
     if (i < 2) chain.append(h('span', {class: `chain-line${(i === 0 ? s.hub.viewer : s.hub.phone) ? ' ok' : ''}`}));
   });
   const spec=s.spec,actual=st&&s.session&&st.session?.id===s.session.id&&Math.abs(s.now_ms-st.ts_ms)<5000?st.car:null;
   const detail = live && spec ? `正在投屏 · ${actual?.width&&actual?.height?`${actual.width}×${actual.height}`:'实际尺寸待上报'} · ${actual?.fps==null?'帧率待采样':`${actual.fps.toFixed(1)} fps`}${s.session ? ` · 已 ${duration((s.now_ms - s.session.started_ms) / 1000)}` : ''}` : s.hub.phone ? 'CarPlay 已连接 · 等待车机画面' : s.link.error?.hint ?? '等待 iPhone 连接';
-  return [h('p', {class: 'lead'}, lead), h('section', {class: 'link-card'}, chain, h('div', {class: 'live'}, h('i', {class: live ? 'ok' : 'idle'}), detail)),
+  const primary = s.hub.phone ? button('重连 CarPlay', () => void a.cmd('reconnect'), 'status-primary') : list.length ? button(`连接 CarPlay${target ? ` · ${target.name}` : ''}`, () => void a.cmd('connect', target?.id), 'status-primary') : null;
+  return [h('p', {class: 'lead'}, lead), ...(primary ? [primary] : []), h('section', {class: 'link-card'}, chain, h('div', {class: 'live'}, h('i', {class: live ? 'ok' : 'idle'}), detail)),
     label('iPhone'), group(h('button', {type: 'button', class: 'row', 'aria-label': '切换 iPhone', onclick: () => { location.hash = 'iphones'; }},
       text(target?.name ?? '还没有 iPhone', target ? (target.current ? '正在投屏' : s.stopped ? '已断开' : linkBusy(s) ? '正在连接…' : target.preferred ? '首选' : '已保存') : '点这里添加'),
       h('span', {class: 'value'}, list.length > 1 ? `切换 · ${list.length} 台` : list.length ? '管理' : '添加', icon('right', 16)))),
-    label('车机屏幕'), group(s.hub.phone ? button('重连 CarPlay', () => void a.cmd('reconnect')) : list.length ? button(`连接 CarPlay${target ? ` · ${target.name}` : ''}`, () => void a.cmd('connect', target?.id)) : null,
-      button('刷新车机页面', () => void a.cmd('reloadCar')), s.stopped ? null : button('断开 CarPlay', () => void a.cmd('disconnect'))),
+    label('车机屏幕'), group(button('刷新车机页面', () => void a.cmd('reloadCar')), s.stopped ? null : button('断开 CarPlay', () => void a.cmd('disconnect'))),
     foot(s.hub.phone ? '画面持续不更新时可尝试重连；没有声音时先检查播放状态、音量与输出设备。重连保留配对。' : '断开后车机不会自动重连，直到这里或车机上选择连接。'), label('快速设置'), group(
-      h('div', {class: 'row'}, h('span', {class: 'grow'}, '画质'), p ? segment('画质', qualities, p.quality, v => {if(v==='custom'){app.pref='quality';app.sheet='prefs';a.render();}else void a.prefs({quality:v});}) : h('span', {class: 'value'}, '等待车机屏幕')),
+      h('div', {class: 'row quick-quality'}, h('span', {class: 'grow'}, '画质'), p ? segment('画质', qualities, p.quality, v => {if(v==='custom'){app.pref='quality';app.sheet='prefs';a.render();}else void a.prefs({quality:v});}) : h('span', {class: 'value'}, '等待车机屏幕')),
       p ? toggle('车机显示调试信息', p.debug, () => void a.prefs({debug: !p.debug})) : row('车机显示调试信息', '—'), row('通话', p ? p.call === 'bt' ? '车机蓝牙' : '车机屏幕麦克风' : '—'))];
 }
 
@@ -60,7 +61,7 @@ export function diagnose(a: Actions): Node[] {
   const b = h('button', {type: 'button', class: 'row blue', disabled: app.busy, onclick: a.test}, app.busy ? '检查中…' : '运行连接检查');
   return [label('实测数据'), checks, foot('未采集的数据以“—”显示。'), label('事件记录'), events,
     label('车机'), group(h('div', {class: 'row'}, h('span', {class: 'grow'}, '浏览器'), h('span', {class: 'value', title: s.viewer?.ua ?? ''}, s.viewer ? browserName(s.viewer.ua) : '尚未连接')), row('画面区', s.viewer?.window ? `${s.viewer.window.rw}×${s.viewer.window.rh} · DPR ${s.viewer.window.dpr}` : '—', true), row('解码', st?.car?.decoder ?? '—')),
-    label('F50'), group(row('系统', app.system?.openwrt ?? '—'), row('CowPlay', `${s.version} · 运行 ${duration(s.uptime_s)}`), row('内存可用', `${num(st?.f50.mem_free_mb)} / ${num(st?.f50.mem_total_mb)} MB`, true), row('热点', `${s.network.ssid ?? '—'}${s.network.channel ? ` · CH${s.network.channel}` : ''}`)),
+    label(receiverName(s)), group(row('系统', app.system?.os ?? app.system?.openwrt ?? receiverPlatform(s)), row('CowPlay', `${s.version} · 运行 ${duration(s.uptime_s)}`), row('内存可用', `${num(st?.f50.mem_free_mb)} / ${num(st?.f50.mem_total_mb)} MB`, true), row('热点', `${s.network.ssid ?? '—'}${s.network.channel ? ` · CH${s.network.channel}` : ''}`)),
     label('iPhone'), group(row('名称', s.phones?.find(x => x.current)?.name ?? '未连接'), row('型号 · 系统', phoneModel(st)), row('Wi‑Fi 信号', phoneWifi(st)), row('蓝牙', st?.phone.bt ?? '—', true)),
     group(h('button', {type: 'button', class: 'row', 'aria-label': '日志', onclick: () => { location.hash = 'log'; }}, h('span', {class: 'grow'}, '日志'), h('span', {class: 'value'}, app.warnings == null ? '查看日志' : `${app.warnings} 条警告`, icon('right', 16))), b, button('导出诊断包…', a.export)),
     ...(app.segments ? [group(diagnosticReadings(app.segments.steps.map(x => [x.step, x.text]))), foot(`检查耗时 ${app.segments.ms} ms；浏览器上报不代表实际声音输出。`)] : []),
@@ -77,11 +78,11 @@ export function logs(a: Actions): Node[] {
 
 export function settings(a: Actions): Node[] {
   const s = app.state!, p = prefs();
-  const pref = (key: typeof app.pref, title: string, value: string) => h('button', {type: 'button', class: 'row', disabled: !p, onclick: () => { app.pref = key; app.sheet = 'prefs'; a.render(); }}, h('span', {class: 'grow'}, title), h('span', {class: 'value'}, value, icon('right', 16)));
+  const pref = (key: typeof app.pref, title: string, value: string) => h('button', {type: 'button', id: `phone-pref-${key}`, class: 'row', disabled: !p, onclick: () => { app.pref = key; app.sheet = 'prefs'; a.render(); }}, h('span', {class: 'grow'}, title), h('span', {class: 'value'}, value, icon('right', 16)));
   return [label('投屏'), group(pref('quality', '画质', p ? qNames[p.quality] : '—'), pref('call', '通话与 Siri', p ? p.call === 'bt' ? '车机蓝牙' : '屏幕麦克风' : '—'), pref('rail_side', '控制栏位置', p ? p.rail_side === 'left' ? '左侧' : '右侧' : '—')),
     foot('投屏偏好跟随当前车机屏幕，和车机“设置”里是同一份。'),
     group(row('访问令牌', app.showToken && app.token ? app.token : '••••••', true), h('button', {type:'button',class:'row blue',disabled:app.tokenBusy,onclick:a.token}, app.tokenBusy ? '正在读取令牌…' : app.showToken ? '隐藏令牌' : '显示令牌')), foot('新车机屏幕第一次打开时要输入这串令牌。重置令牌请到管理页。'),
-    label('由管理页负责（只读）'), group(row(s.network.platform === 'linux' ? 'CarPlay 热点' : 'F50 热点', s.network.ssid ?? '—'), row('访问地址', s.network.host, true), h('div', {class: 'row'}, h('span', {class: 'grow'}, 'HTTPS 证书'), h('span', {class: `value${s.network.cert_days == null ? '' : s.network.cert_days >= 0 ? ' green' : ' red'}`}, s.network.cert_days == null ? '—' : s.network.cert_days === 0 ? '有效 · 不足 1 天' : s.network.cert_days > 0 ? `有效 · 剩 ${s.network.cert_days} 天` : '已过期')), row('DDNS', s.network.ddns.enabled ? s.network.ddns.ok === false ? '更新失败' : s.network.ddns.ok ? '已更新' : '等待更新' : '未启用')),
+    label('由管理页负责（只读）'), group(row('CarPlay 热点', s.network.ssid ?? '—'), row('访问地址', s.network.host, true), h('div', {class: 'row'}, h('span', {class: 'grow'}, 'HTTPS 证书'), h('span', {class: `value${s.network.cert_days == null ? '' : s.network.cert_days >= 0 ? ' green' : ' red'}`}, s.network.cert_days == null ? '—' : s.network.cert_days === 0 ? '有效 · 不足 1 天' : s.network.cert_days > 0 ? `有效 · 剩 ${s.network.cert_days} 天` : '已过期')), row('DDNS', s.network.ddns.enabled ? s.network.ddns.ok === false ? '更新失败' : s.network.ddns.ok ? '已更新' : '等待更新' : '未启用')),
     group(h('a', {class: 'row', href: s.network.luci ?? '#', target: '_blank', rel: 'noopener'}, text('打开管理页', s.network.platform === 'linux' ? 'CowPlay 主机管理' : 'OpenWrt › 服务 › CowPlay'), h('span', {class: 'value'}, '↗')), row('关于 CowPlay', s.version)),
     displaySupport(s), foot(s.network.platform === 'linux' ? 'CowPlay 管理使用独立管理令牌。热点、路由与服务由主机系统管理。' : 'Wi‑Fi、证书、DDNS、令牌、服务和升级都在管理页修改，使用 OpenWrt 的登录账号。')];
 }

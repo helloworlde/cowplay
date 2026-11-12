@@ -15,6 +15,18 @@ def run(args):
     return subprocess.run([str(a) for a in args], check=True, capture_output=True).stdout
 
 
+def bootstrap_command(repository, tag, version, script_hash, fingerprint):
+    url = f"https://github.com/{repository}/releases/download/{tag}/install-openwrt-from-github.sh"
+    return (
+        '/bin/sh -c \'umask 077; ('
+        f'work=$(mktemp -d /tmp/cowplay-install.XXXXXX) && '
+        f'curl --fail --location --proto "=https" --proto-redir "=https" --connect-timeout 15 --max-time 180 --max-filesize 16384 "{url}" -o "$work/install.sh" && '
+        f'echo "{script_hash}  $work/install.sh" | sha256sum -c - && '
+        f'/bin/sh "$work/install.sh" {version} {fingerprint}'
+        ') >/tmp/cowplay-install.log 2>&1 </dev/null & echo "Started; read /tmp/cowplay-install.log for progress."\''
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository', help='GitHub OWNER/REPO')
@@ -58,6 +70,7 @@ def main():
         parser.error('core and LuCI package versions must match')
     version = metadata[0]['version']
     linux_files = {}
+    bootstrap_binary = None
     expected = {'cowplay', 'install.sh', 'cowplay.service', 'config.example.json', 'VERSION', 'ARCH', 'UPGRADE_FROM', 'LICENSE', 'NOTICE.md', 'TESLA-PROTOCOL-LICENSE', 'LIVI-NOTICE', 'README.md'}
     for arch, archive_path in [('x86_64', args.linux_x86_64), ('arm64', args.linux_arm64)]:
         if archive_path is None:
@@ -83,6 +96,8 @@ def main():
             elf = archive.extractfile(root + '/cowplay').read(64)
             if elf[:7] != b'\x7fELF\x02\x01\x01' or int.from_bytes(elf[18:20], 'little') != (62 if arch == 'x86_64' else 183):
                 parser.error('Linux archive executable architecture mismatch')
+            if arch == 'arm64':
+                bootstrap_binary = archive.extractfile(root + '/cowplay').read()
         linux_files[root + '.tar.gz'] = archive_path
     args.output.mkdir(mode=0o755, parents=True)
     with tempfile.TemporaryDirectory(prefix='cowplay-release-keys-') as raw:
@@ -98,7 +113,7 @@ def main():
             run([args.apk, '--allow-untrusted', 'adbsign', '--reset-signatures', '--sign-key', args.sign_key.resolve(), target.resolve()])
             run([args.apk, '--keys-dir', keys, '--no-network', 'verify', target.resolve()])
             packages.append(dict(name=info['name'], arch=info['arch'], file=name, size=target.stat().st_size, sha256=hashlib.file_digest(target.open('rb'), 'sha256').hexdigest()))
-        manifest = dict(schema=1, repository=args.repository, tag='v' + version, version=version, platform='openwrt-apk', openwrt_releases=args.openwrt_release, arch='aarch64_generic', upgrade_from=args.upgrade_from, packages=packages)
+        manifest = dict(schema=1, repository=args.repository, tag='v' + (version[:-3] if version.endswith('-r0') else version), version=version, platform='openwrt-apk', openwrt_releases=args.openwrt_release, arch='aarch64_generic', upgrade_from=args.upgrade_from, packages=packages)
         file = args.output / 'cowplay-release.json'
         file.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
         signature = args.output / 'cowplay-release.sig'
@@ -108,6 +123,15 @@ def main():
             shutil.copyfile(source, args.output / name)
         if linux_files:
             shutil.copyfile(Path(__file__).resolve().parent / 'install-linux-from-github.sh', args.output / 'install-linux-from-github.sh')
+            shutil.copyfile(Path(__file__).resolve().parent / 'install-openwrt-from-github.sh', args.output / 'install-openwrt-from-github.sh')
+            (args.output / 'cowplay-updater-aarch64').write_bytes(bootstrap_binary)
+            # The administrator pastes this into the official LuCI Custom Commands page.
+            # Keep both integrity anchors literal; no downloaded text is evaluated first.
+            script_hash = hashlib.sha256((args.output / 'install-openwrt-from-github.sh').read_bytes()).hexdigest()
+            fingerprint = hashlib.sha256(public).hexdigest()
+            url = f"https://github.com/{args.repository}/releases/download/{manifest['tag']}/install-openwrt-from-github.sh"
+            command = bootstrap_command(args.repository, manifest['tag'], version, script_hash, fingerprint)
+            (args.output / 'install-openwrt-command.txt').write_text(command + '\n')
         checksum_file = args.output / 'SHA256SUMS'
         checksums = []
         for file in sorted(args.output.iterdir()):

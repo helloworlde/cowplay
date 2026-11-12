@@ -103,6 +103,9 @@ async fn call(
     let result = match method.as_str() {
         "policy" => Ok(serde_json::json!({"policy":m.admin.policy()})),
         "policy_update" => update(&m.admin, &args),
+        "tesla_status" => crate::ctl::dispatch(&m.admin, &method, &args).await,
+        #[cfg(feature = "tesla")]
+        "tesla_configure" | "tesla_connect" | "tesla_disconnect" | "tesla_pair" | "tesla_cancel" | "tesla_climate_pair" | "tesla_climate_query" | "tesla_climate_command" | "tesla_ultra_control" => crate::ctl::dispatch(&m.admin, &method, &args).await,
         "status" | "diag" | "screens" | "client_remove" | "token" | "cert" | "cert_upload"
         | "mfi_upload" | "logs" => crate::ctl::dispatch(&m.admin, &method, &args).await,
         _ => return StatusCode::NOT_FOUND.into_response(),
@@ -205,6 +208,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+        #[cfg(feature = "tesla")]
+        {
+            for method in ["tesla_configure", "tesla_connect", "tesla_disconnect", "tesla_pair", "tesla_cancel", "tesla_climate_pair", "tesla_climate_query", "tesla_climate_command", "tesla_ultra_control"] {
+                let url = format!("http://{addr}/api/manage/{method}");
+                let r = client.post(&url).header("Origin", "https://test.invalid")
+                    .header("Cookie", format!("{}={}", f50_server::clients::COOKIE, browser.id))
+                    .body("{}").send().await.unwrap();
+                assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "screen cookies cannot call {method}");
+                let r = client.post(&url).bearer_auth(&token).header("Origin", "https://other.invalid").body("{}").send().await.unwrap();
+                assert_eq!(r.status(), StatusCode::FORBIDDEN, "maintenance still checks Origin for {method}");
+            }
+            let r = client.post(format!("http://{addr}/api/manage/tesla_status")).bearer_auth(&token)
+                .header("Origin", "https://test.invalid").body("{}").send().await.unwrap();
+            assert_eq!(r.status(), StatusCode::OK);
+            let r = client.post(format!("http://{addr}/api/manage/tesla_configure")).bearer_auth(&token)
+                .header("Origin", "https://test.invalid").body(r#"{"vin":"5YJ30123456789ABC","enabled":true,"private_key":"/synthetic/not-accepted.pk8"}"#).send().await.unwrap();
+            assert_eq!(r.status(), StatusCode::CONFLICT, "the HTTP API never accepts an identity path");
+            assert!(!dir.path().join("tesla").exists());
+        }
         for origin in [None, Some("https://other.invalid")] {
             let mut req = client
                 .post(&url)

@@ -30,7 +30,7 @@ release=$(sed -n "s/^DISTRIB_RELEASE=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}$/\1/p" 
 [ -n "$release" ] && get '@.openwrt_releases[*]' | grep -Fqx "$release" || fail 'RESTORE_PENDING: firmware release was not declared compatible; install a reviewed compatible release manually'
 version=$(get '@.version')
 case "$version" in ''|*[!0-9.r-]*) fail 'RESTORE_PENDING: invalid package version';; esac
-[ "$(get '@.tag')" = "v$version" ] || fail 'RESTORE_PENDING: tag mismatch'
+[ "$(get '@.tag')" = "v${version%-r0}" ] || fail 'RESTORE_PENDING: tag mismatch'
 restore_boot() {
     case "$1" in
         enabled) "$init" enable >/dev/null 2>&1 || fail 'RESTORE_PENDING: cannot restore boot preference';;

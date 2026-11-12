@@ -1,3 +1,4 @@
+import {receiverDevice} from '../shared/receiver';
 // 01 · Connect flow: onboard, add iPhone, pair, connecting, choose, takeover, not found, token, stopped.
 import {$, clear, h} from '../shared/dom';
 import {mmss} from '../shared/fmt';
@@ -6,7 +7,7 @@ import {pairingAdapterName, pairingCode, pairingFinishing, pairingWaiting, recen
 import type {NearbyPhones} from '../shared/pairing';
 import {ConnectionDebug} from '../shared/connection-debug';
 import {app, phoneName, phonesOf, type Scene} from './app';
-import {spaced, svg, ago} from './ui';
+import {spaced, svg, ago, renderManagementEntry} from './ui';
 
 export interface ConnectActions {
   /** Connect (or switch to) this saved iPhone. */
@@ -52,7 +53,7 @@ export function notFound(): boolean {
 
 type St = 'ok' | 'active' | 'warn' | 'idle';
 function node(kind: 'car' | 'f50' | 'phone', label: string, sub: string, st: St): HTMLElement {
-  return h('div', {class: `node ${st} st-${st}`},
+  return h('div', {class: `node ${st} st-${st}${kind === 'f50' ? ' receiver-node' : ''}`},
     h('span', {class: 'ring'}, svg(kind), h('span', {class: 'badge'})),
     h('span', {class: 'node-label'}, label), h('span', {class: 'node-sub'}, sub));
 }
@@ -87,7 +88,7 @@ function rtt(): string {
 
 function pipeFor(sc: Scene, name: string): HTMLElement[] {
   const car = (st: St = 'ok', sub = '已连接') => node('car', '这块屏幕', sub, st);
-  const f50 = node('f50', 'CowPlay', 'F50', 'ok');
+  const f50 = node('f50', 'CowPlay', receiverDevice(app.state), 'ok');
   const s = app.state;
   const newName = s?.pairing.name ?? '新 iPhone';
   switch (sc) {
@@ -107,7 +108,7 @@ function pipeFor(sc: Scene, name: string): HTMLElement[] {
       return [car('warn', '未显示'), link(rtt(), 'ok'), f50, link(fps ? `${Math.round(fps)} fps` : '投屏中', 'ok'), node('phone', name, 'CarPlay 已连接', 'ok')];
     }
     case 'notfound': return [car(), link(rtt(), 'ok'), f50, link('尚未连接', 'warn'), node('phone', name, '等待响应', 'idle')];
-    case 'token': return [car('warn', '需要令牌'), link('—', 'idle'), node('f50', 'CowPlay', 'F50', 'ok'), link('—', 'idle'), node('phone', 'iPhone', '', 'idle')];
+    case 'token': return [car('warn', '需要令牌'), link('—', 'idle'), node('f50', 'CowPlay', receiverDevice(app.state), 'ok'), link('—', 'idle'), node('phone', 'iPhone', '', 'idle')];
     case 'stopped': return [car(), link(rtt(), 'ok'), f50, link('已断开', 'idle'), node('phone', `${phonesOf(s).length} 台 iPhone`, '配对已保留', 'idle')];
     default: {
       const st = steps(), active = st.findIndex(x => x.st !== 'done');
@@ -242,13 +243,18 @@ export function renderConnect(a: ConnectActions): void {
       t = e ? ['连接未完成', name, `${e.title.replace(/[。.]$/, '')}。${e.hint}`, '连上后自动进入 CarPlay'] : ['正在连接', name, '保持 iPhone 的蓝牙和 Wi‑Fi 打开，通常 10 秒内出现画面。', '连上后自动进入 CarPlay'];
       if (e) eb.className = 'eyebrow orange';
       body.push(stepList());
-      body.push(actions(e ? btn('重新连接', 'blue', () => a.retry()) : null, btn('换一台 iPhone', '', () => a.openChoose())));
+      body.push(actions(e ? btn(app.buildMismatch ? '刷新页面' : '重新连接', 'blue', () => a.retry()) : null, btn('换一台 iPhone', '', () => a.openChoose())));
     }
+  }
+  if (app.buildMismatch) {
+    t = ['页面已更新', '刷新 CowPlay', '页面与接收端版本不一致，授权仍保留。', '刷新后继续使用'];
+    body.splice(0, body.length, btn('刷新页面', 'blue', () => a.retry()));
   }
   eb.textContent = t[0];
   $('c-title').textContent = t[1];
   $('c-lead').textContent = t[2];
   $('c-foot').textContent = t[3];
+  renderManagementEntry($('c-admin'), s?.network.luci ?? null, s?.network.platform);
   if (app.authorized && app.stateError) body.push(h('p',{class:'error',role:'alert'},app.stateError));
   if (app.authorized && s) body.push(debug.update(s,app.channel));
   clear($('c-body'), ...body);

@@ -12,7 +12,7 @@ case "$(uname -m)" in x86_64) arch=x86_64;; aarch64|arm64) arch=arm64;; *) echo 
 for tool in curl openssl sha256sum tar sort cmp awk; do command -v "$tool" >/dev/null 2>&1 || { echo "Missing download tool: $tool" >&2; exit 1; }; done
 work=$(mktemp -d /tmp/cowplay-download.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-base="https://github.com/helloworlde/cowplay/releases/download/v$version"
+base="https://github.com/helloworlde/cowplay/releases/download/v${version%-r0}"
 archive="cowplay-$version-linux-$arch.tar.gz"
 for file in release-key.pem SHA256SUMS SHA256SUMS.sig "$archive"; do
     case "$file" in "$archive") limit=134217728;; *) limit=16384;; esac

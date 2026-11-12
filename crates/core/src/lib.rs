@@ -29,6 +29,7 @@ pub mod bootstrap;
 pub mod tunnel;
 
 pub mod validation;
+#[cfg(feature = "tesla")]
 pub mod tesla;
 pub mod vehicle;
 pub mod vehicle_status;

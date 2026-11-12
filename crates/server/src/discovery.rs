@@ -42,7 +42,7 @@ fn service(c: &Credentials, address: SocketAddr) -> io::Result<ServiceInfo> {
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
     let pairing = std::str::from_utf8(&c.pairing_id).map_err(error)?;
-    let hostname = format!("f50-{}.local.", &key[..12]);
+    let hostname = format!("cowplay-{}.local.", &key[..12]);
     let txt = [
         ("deviceid", device),
         ("features", features.as_str()),
@@ -163,7 +163,7 @@ mod tests {
                 .as_dictionary_mut()
                 .unwrap()
                 .insert("features".into(), bplist::number(features));
-            let credentials = Credentials {
+            let mut credentials = Credentials {
                 pairing_store: None,
                 pairing_id: b"synthetic-pairing".to_vec(),
                 signing_seed: Zeroizing::new([0; 32]),
@@ -205,6 +205,21 @@ mod tests {
                 Some("02:00:00:00:00:02")
             );
             assert_eq!(registered.get_property_val_str("srcvers"), Some("366.0"));
+            assert!(registered.get_hostname().starts_with("cowplay-"));
+            let pairing_id=credentials.pairing_id.clone();
+            let seed=*credentials.signing_seed;
+            let endpoint=Arc::get_mut(credentials.endpoint.as_mut().unwrap()).unwrap();
+            endpoint.name="cowplay-rasp".into();
+            let first=service(&credentials,"192.0.2.1:7000".parse().unwrap()).unwrap();
+            let endpoint=Arc::get_mut(credentials.endpoint.as_mut().unwrap()).unwrap();
+            endpoint.name="cowplay-garage".into();
+            endpoint.pairing_public_key=[1;32];
+            let second=service(&credentials,"192.0.2.2:7000".parse().unwrap()).unwrap();
+            assert_ne!(first.get_fullname(),second.get_fullname());
+            assert_ne!(first.get_hostname(),second.get_hostname());
+            assert!(first.get_fullname().starts_with("cowplay-rasp."));
+            assert_eq!(credentials.pairing_id,pairing_id);
+            assert_eq!(*credentials.signing_seed,seed);
         }
     }
 }

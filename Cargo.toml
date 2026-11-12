@@ -7,11 +7,19 @@ edition = "2021"
 license = "GPL-3.0-only"
 [package]
 name = "cowplay"
-version = "0.3.14"
+version = "0.0.1"
 edition = "2024"
 license = "GPL-3.0-only"
+[features]
+default = ["tesla"]
+tesla = ["f50-core/tesla"]
+
+[[example]]
+name = "tesla-ble-scan"
+required-features = ["tesla"]
+
 [dependencies]
-f50-core = {path="crates/core"}
+f50-core = {path="crates/core",default-features=false}
 f50-server = {path="crates/server"}
 tokio = {version="=1.47.1",features=["rt-multi-thread","net","sync","time","macros","signal","process","io-util"]}
 serde = {version="=1.0.228",features=["derive"]}

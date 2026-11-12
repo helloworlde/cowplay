@@ -51,7 +51,7 @@ pub struct DisplayInfo<'a> {
     /// Offer HEVC (`hevcInfo`); the phone makes the final choice.
     pub hevc: bool,
     /// Calls/Siri through the car browser microphone (PlayPort/DashPlay non-Tesla route):
-    /// declare telephony/speechRecognition with mono PCM input. False keeps the Tesla split.
+    /// declare PCM/Opus input. Output audio types remain present when the microphone is off.
     pub microphone: bool,
     pub right_hand_drive: bool,
 }
@@ -102,7 +102,7 @@ pub fn build(c: &DisplayInfo) -> Result<Vec<u8>> {
             ]),
         ),
     ]);
-    // Tesla split: no speech, telephony or microphone formats. Navigation remains a required downstream path.
+    // Keep the complete PlayPort output profile, independently of the selected microphone route.
     let format = |kind, audio, mask| {
         dict([
             ("type", number(kind)),
@@ -111,29 +111,25 @@ pub fn build(c: &DisplayInfo) -> Result<Vec<u8>> {
         ])
     };
     let pcm = 0x3fc | 0xc000;
-    // Mono PCM 8/16/24/32/48 kHz; only PCM input is implemented (no Opus encoder uplink).
+    // Mono PCM input and raw Opus packets are implemented by the browser uplink.
     let pcm_mono = 0x154 | 0x4000;
-    let with_input = |kind, audio, mask| {
-        dict([
-            ("type", number(kind)),
-            ("audioType", s(audio)),
-            ("audioOutputFormats", number(mask)),
-            ("audioInputFormats", number(pcm_mono)),
-        ])
+    let with_input = |kind, audio, output, input| {
+        let mut entry = format(kind, audio, output);
+        if c.microphone { entry.as_dictionary_mut().unwrap().insert("audioInputFormats".into(), number(input)); }
+        entry
     };
-    let mut format_list = vec![
-        format(100, "compatibility", pcm),
+    let opus = 0x70000000;
+    let format_list = vec![
+        with_input(100, "compatibility", pcm, pcm_mono),
         format(101, "compatibility", pcm),
-        format(100, "default", pcm | 0x70000000),
+        with_input(100, "default", pcm | opus, pcm_mono | opus),
         format(100, "alert", pcm | 0x70000000),
         format(100, "media", pcm),
+        with_input(100, "telephony", pcm_mono | opus, pcm_mono | opus),
+        with_input(100, "speechRecognition", pcm_mono | opus, pcm_mono | opus),
         format(101, "default", pcm | 0x70000000),
         format(102, "media", 0x800000),
     ];
-    if c.microphone {
-        format_list.push(with_input(100, "telephony", pcm_mono | 0x70000000));
-        format_list.push(with_input(100, "speechRecognition", pcm_mono | 0x70000000));
-    }
     let formats = array(format_list);
     let latency = |t: u64, audio: Option<&str>| {
         let mut items = vec![("type", number(t)), ("inputLatencyMicros", number(0)), ("outputLatencyMicros", number(0))];
@@ -142,11 +138,10 @@ pub fn build(c: &DisplayInfo) -> Result<Vec<u8>> {
         }
         dict(items)
     };
-    let mut latency_list: Vec<Value> = [100, 101, 102].into_iter().map(|t| latency(t, None)).collect();
-    if c.microphone {
-        latency_list.push(latency(100, Some("telephony")));
-        latency_list.push(latency(100, Some("speechRecognition")));
-    }
+    let latency_list = vec![latency(100, None), latency(100, Some("default")),
+        latency(100, Some("media")), latency(100, Some("telephony")),
+        latency(100, Some("speechRecognition")), latency(100, Some("alert")),
+        latency(101, None), latency(101, Some("default")), latency(102, Some("default"))];
     let latencies = array(latency_list);
     let mut entries = vec![
         ("sourceVersion", s("366.0")),
@@ -305,8 +300,11 @@ mod tests {
             let input = f["audioInputFormats"].as_unsigned_integer().unwrap();
             for bit in (0..64).map(|b| 1u64 << b).filter(|b| input & b != 0) {
                 let parsed = crate::audio::Format::from_bits(bit).unwrap();
-                assert_eq!((parsed.codec, parsed.channels), (3, 1), "input must be mono PCM we can produce");
+                assert!(matches!(parsed.codec, 2 | 3) && parsed.channels == 1,
+                    "input must match the implemented mono PCM/Opus uplink");
             }
+            assert_eq!(input, f["audioOutputFormats"].as_unsigned_integer().unwrap(),
+                "voice input and output share one negotiated format");
         }
         for bad in [base(25, 180, false), base(61, 180, false), base(33, 180, false), base(30, 20, false)] {
             assert!(build(&bad).is_err());
@@ -371,7 +369,7 @@ mod tests {
         );
     }
     #[test]
-    fn declares_no_microphone_calls_or_fake_vehicle() {
+    fn retains_complete_audio_outputs_without_a_microphone() {
         let b = build(&DisplayInfo {
             name: "synthetic",
             model: "F50",
@@ -389,13 +387,16 @@ mod tests {
         let info = crate::bplist::decode(&b).unwrap();
         let d = info.as_dictionary().unwrap();
         let formats = d["audioFormats"].as_array().unwrap();
-        assert_eq!(formats.len(), 7);
+        assert_eq!(formats.len(), 9);
         for v in formats {
             let f = v.as_dictionary().unwrap();
             assert!(!f.contains_key("audioInputFormats"));
-            assert!(
-                !["telephony", "speechRecognition"].contains(&f["audioType"].as_string().unwrap())
-            );
+        }
+        for name in ["telephony", "speechRecognition"] {
+            assert!(formats.iter().any(|v| {
+                let row = v.as_dictionary().unwrap();
+                row["type"].as_unsigned_integer() == Some(100) && row["audioType"].as_string() == Some(name)
+            }), "disabling the microphone must retain the required {name} output entry");
         }
     }
 }

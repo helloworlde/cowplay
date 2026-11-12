@@ -16,10 +16,14 @@ use std::{
 
 mod certificates;
 mod diagnostics;
+mod diagnostics_export;
 mod display;
 mod http;
+mod log_export;
 mod preferences;
 pub(crate) mod management;
+#[cfg(feature = "tesla")]
+pub(crate) mod tesla;
 
 pub use http::router;
 pub(crate) use http::{fail, json_ok};
@@ -45,6 +49,8 @@ fn log_storage_check(enabled: bool, storage: &Value) -> (&'static str, String) {
 // ---------- shared state ----------
 
 pub struct Admin {
+    #[cfg(feature = "tesla")]
+    pub(crate) tesla: Arc<crate::tesla_ble::management::Manager>,
     pub manager: Arc<Manager>,
     pub hub: Arc<Hub>,
     pub origin: String,
@@ -54,6 +60,10 @@ pub struct Admin {
     pub config_path: PathBuf,
     pub state_dir: PathBuf,
     pub(crate) tls: Mutex<(String, String)>,
+    pub(crate) public_tls: Mutex<Option<Vec<Vec<u8>>>>,
+    pub(crate) public_mfi: Mutex<Option<Vec<Vec<u8>>>>,
+    pub(crate) pending_public_mfi: Mutex<Option<Vec<Vec<u8>>>>,
+    pub(crate) running_mfi_key: Mutex<Option<PathBuf>>,
     pub web_bind: SocketAddr,
     pub control_bind: SocketAddr,
     pub wifi: Option<(String, u8)>,
@@ -125,7 +135,10 @@ impl Admin {
         web_bind: SocketAddr, control_bind: SocketAddr, wifi: Option<(String, u8)>, display: (u16, u16), openwrt: bool,
     ) -> Result<Arc<Self>, String> {
         let uci_path = policy_store.path().to_owned();
+        let public_tls = crate::certificates::public_chain(Path::new(&tls_certificate)).ok();
         let admin = Arc::new(Self {
+            #[cfg(feature = "tesla")]
+            tesla: crate::tesla_ble::management::Manager::new(&state_dir, hub.vehicle.clone()),
             manager,
             hub,
             origin,
@@ -135,6 +148,10 @@ impl Admin {
             config_path,
             state_dir,
             tls: Mutex::new((tls_certificate, tls_private_key)),
+            public_tls: Mutex::new(public_tls),
+            public_mfi: Mutex::new(None),
+            pending_public_mfi: Mutex::new(None),
+            running_mfi_key: Mutex::new(None),
             web_bind,
             control_bind,
             wifi,
@@ -337,12 +354,15 @@ pub(crate) fn summary(s: &diag::Session) -> Value {
         "warnings": s.warnings,
         "first_frame_ms": s.first_frame_ms,
         "events": s.events,
+        "model": s.model,
+        "os": s.os,
+        "transport_failure": s.transport_failure,
     })
 }
 
 pub fn unsupported() -> Value {
     json!({
-        "wired": "F50 的 USB 口不能当主机（硬件限制），无法有线 CarPlay；只能无线重连",
+        "wired": "当前服务仅实现无线 CarPlay，未提供有线连接入口",
     })
 }
 

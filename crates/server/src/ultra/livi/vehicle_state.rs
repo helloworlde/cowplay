@@ -4,12 +4,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::bplist;
+use f50_core::bplist;
 use super::image_archive;
 use super::opack::{self, Value, dict};
 
 mod body;
 mod climate;
+mod live_climate;
 mod cluster;
 mod engines;
 mod media;
@@ -404,7 +405,7 @@ impl VehicleState {
         }
         self.values.insert(1291,Value::str("Tesla BLE 数据"));
         self.values.insert(1292,Value::str("未连接车辆；没有实时读数"));
-        self.set_live_values(&f50_core::vehicle::Values::default());self
+        self.set_live_values(&f50_core::vehicle::Values::default());self.with_live_climate()
     }
     pub fn set_data_status(&mut self,text:&str)->Vec<(Lane,Vec<u8>)> {let mut changed=Vec::new();self.car_sets(1292,Value::str(text),&mut changed);update_notify(changed).into_iter().collect()}
     pub fn set_live_values(&mut self,values:&f50_core::vehicle::Values)->Vec<(Lane,Vec<u8>)>{

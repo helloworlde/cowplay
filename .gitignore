@@ -3,6 +3,12 @@
 /private/
 *.key
 *.pem
+
+/web/node_modules/
+
+# Public verification key only. The signing key remains under ignored /private/.
+!/packaging/release-key.pem
+
 *.pk8
 *.p12
 *.pfx
@@ -12,4 +18,4 @@
 /deliverables/
 /docs/evidence/
 
-/web/node_modules/
+__pycache__/

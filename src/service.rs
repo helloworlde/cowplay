@@ -1,6 +1,6 @@
 use crate::{
     bluetooth::Manager,
-    platform::Bluetooth,
+    platform::{Bluetooth, Host},
     rfcomm, web,
 };
 use f50_server::{
@@ -38,6 +38,8 @@ pub struct Config {
     #[serde(default)]
     pub bluetooth: Bluetooth,
     #[serde(default)]
+    pub host: Option<Host>,
+    #[serde(default)]
     pub policy: Option<crate::policy::Store>,
     #[serde(default)]
     pub management_token_file: Option<PathBuf>,
@@ -50,10 +52,13 @@ pub struct Config {
     pub ctl_socket: Option<PathBuf>,
 }
 impl Config {
+    pub fn host(&self) -> Host {
+        self.host.unwrap_or(if self.bluetooth.is_f50() { Host::Openwrt } else { Host::Linux })
+    }
     pub fn policy_store(&self) -> Result<crate::policy::Store, String> {
         if self.policy.is_some() && self.uci_config.is_some() { return Err("choose policy or uci_config, not both".into()); }
         Ok(self.policy.clone().unwrap_or_else(|| {
-            if self.bluetooth.is_f50() || self.uci_config.is_some() {
+            if self.host().is_openwrt() || self.uci_config.is_some() {
                 crate::policy::Store::Uci { path: self.uci_config.clone().unwrap_or_else(|| PathBuf::from(crate::policy::DEFAULT_PATH)) }
             } else {
                 crate::policy::Store::Json { path: self.state_dir.join("policy.json") }
@@ -66,7 +71,10 @@ pub async fn serve(
     mut signals: tokio::sync::watch::Receiver<bool>,
 ) -> crate::RuntimeResult<()> {
     let mut config: Config = serde_json::from_slice(&settings::read(path, 32768)?)?;
+    let openwrt = config.host().is_openwrt();
     let management_secret = crate::admin::management::load_token(config.management_token_file.as_deref())?;
+    config.receiver.name = crate::receiver_name::for_device(crate::receiver_name::local_device_name());
+    let receiver_name = config.receiver.name.clone();
     let store = config.policy_store()?;
     // LuCI owns the public address: a domain/port in UCI overrides config.json.
     let policy = if store.path().exists() {
@@ -74,7 +82,7 @@ pub async fn serve(
         crate::policy::Policy::validate_display(&pkg)?;
         crate::policy::Policy::from_uci(&pkg)
     } else { crate::policy::Policy::default() };
-    if config.bluetooth.is_f50() || store.path().exists() || config.uci_config.is_some() {
+    if openwrt || store.path().exists() || config.uci_config.is_some() {
         let web = &mut config.receiver.web;
         web.bind.set_port(policy.port);
         let mut origin = reqwest::Url::parse(&web.origin)?;
@@ -85,8 +93,9 @@ pub async fn serve(
     let mut wifi = config.receiver.wifi.as_ref().map(|w| (w.ssid.clone(), w.channel));
     let display = (config.receiver.width, config.receiver.height);
     // Validate user identity/TLS before taking ownership of the controller.
+    let running_mfi_key = std::path::PathBuf::from(&config.receiver.mfi_pkcs8_file);
     let mut prepared = config.receiver.prepare()?;
-    if config.bluetooth.is_f50() {
+    if openwrt {
     if let Some((ssid, previous_channel)) = &wifi {
         if let Ok(pkg) = crate::uci::Package::read(std::path::Path::new("/etc/config/wireless")) {
             if let Some(hotspot) = uci_hotspot(&pkg, &policy.wifi_iface, ssid)? {
@@ -113,7 +122,7 @@ pub async fn serve(
     let phone_file = config.state_dir.join("phone");
     let (manager, mut channels) = tokio::select! {
         _=signals.changed()=>return Ok(()),
-        result=Manager::register_on(config.bluetooth.bus(),&phone_file,config.bluetooth.adapter(),config.bluetooth.is_f50())=>result?,
+        result=Manager::register_named_on(config.bluetooth.bus(),&phone_file,config.bluetooth.adapter(),config.bluetooth.is_f50(),&receiver_name)=>result?,
     };
     prepared.pairings.initialize(manager.selected_phone().as_deref())?;
     let (hub, commands) = Hub::with_phones(
@@ -138,21 +147,29 @@ pub async fn serve(
         prepared.control_bind,
         wifi,
         display,
-        config.bluetooth.is_f50(),
+        openwrt,
     )?;
+    {
+        use der::Encode;
+        let cert = f50_core::mfi::public_certificate(identity.certificate()).map_err(|e|format!("运行时 CarPlay 公开证书解析失败：{e:?}"))?.to_der()?;
+        *admin.public_mfi.lock().unwrap() = Some(vec![cert]);
+        *admin.running_mfi_key.lock().unwrap() = Some(running_mfi_key);
+    }
     let management = crate::admin::management::router(admin.clone(), management_secret);
-    let vehicle_worker=tokio::spawn(crate::tesla_ble::worker::supervise_on(config.state_dir.join("tesla-ble.json"),hub.vehicle.clone(),rx.clone(),config.bluetooth.bus().to_owned(),config.bluetooth.adapter()));
+    let vehicle_expiry = tokio::spawn(expire_vehicle_feed(hub.vehicle.clone(), rx.clone()));
+    #[cfg(feature = "tesla")]
+    let vehicle_worker=tokio::spawn(admin.tesla.clone().run(config.bluetooth.bus().to_owned(),config.bluetooth.adapter(),rx.clone()));
     *admin.active_wifi_password.lock().unwrap() = Some(endpoint.password.clone());
     let routes = web::router(manager.clone(), hub.clone())
         .merge(crate::admin::router(admin.clone()))
         .merge(crate::console::router(admin.clone()))
         .merge(management);
-    let routes = if config.bluetooth.is_f50() { routes } else {
+    let routes = if openwrt { routes } else {
         routes.merge(crate::admin::management::entry(config.management_token_file.is_some()))
     };
     let ctl = {
         let admin = admin.clone();
-        let socket = config.ctl_socket.clone().unwrap_or_else(|| if config.bluetooth.is_f50() { PathBuf::from(crate::ctl::SOCKET) } else { config.state_dir.join("control.sock") });
+        let socket = config.ctl_socket.clone().unwrap_or_else(|| if openwrt { PathBuf::from(crate::ctl::SOCKET) } else { config.state_dir.join("control.sock") });
         tokio::spawn(async move {
             if let Err(e) = crate::ctl::serve(admin, &socket).await {
                 f50_server::diag_log!(Warn, "web", "LuCI control socket unavailable: {e}");
@@ -227,8 +244,11 @@ pub async fn serve(
     // Share the existing 8s phone + 3s HTTP budget; leave 3s for owned-child cleanup
     // and a margin before procd's 15s SIGKILL. Tesla starts stopping concurrently.
     let shutdown_deadline = tokio::time::Instant::now() + Duration::from_secs(14);
+    #[cfg(feature = "tesla")]
     let vehicle_deadline = shutdown_deadline - Duration::from_secs(3);
     let _ = stop.send(true);
+    vehicle_expiry.abort();
+    let _ = vehicle_expiry.await;
     sampler.abort();
     ddns.abort();
     ctl.abort();
@@ -255,6 +275,7 @@ pub async fn serve(
         let _ = receiver.await;
     }
     hub.reset();
+    #[cfg(feature = "tesla")]
     finish_vehicle_worker(vehicle_worker, vehicle_deadline).await;
     drop(manager);
     drop(board);
@@ -263,6 +284,19 @@ pub async fn serve(
     result
 }
 
+async fn expire_vehicle_feed(feed: std::sync::Arc<f50_server::vehicle::Feed>, mut stop: tokio::sync::watch::Receiver<bool>) {
+    let mut every = tokio::time::interval(Duration::from_secs(1));
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    while !*stop.borrow() {
+        tokio::select! {
+            biased;
+            _ = stop.changed() => break,
+            _ = every.tick() => feed.tick(),
+        }
+    }
+}
+
+#[cfg(feature = "tesla")]
 async fn finish_vehicle_worker(mut worker: tokio::task::JoinHandle<()>, deadline: tokio::time::Instant) {
     if tokio::time::timeout_at(deadline, &mut worker).await.is_err() {
         worker.abort();
@@ -274,6 +308,26 @@ async fn finish_vehicle_worker(mut worker: tokio::task::JoinHandle<()>, deadline
 #[cfg(test)]
 mod ui_policy_tests {
     use super::*;
+    #[tokio::test]
+    async fn generic_vehicle_expiry_publishes_stale_values_and_stops_without_a_vendor() {
+        use f50_core::vehicle::{Reading, Update};
+        let feed = f50_server::vehicle::Feed::new();
+        feed.status(true, true, "reading");
+        let received = f50_server::vehicle::now_ms() - 29_900;
+        feed.apply(Update::Charge {
+            soc_pct: Some(Reading { value: 68.0, received_ms: received, sample_received_ms: received, sampled_ms: Some(received), sampled_time_trusted: true }),
+            range_km: None,
+        });
+        assert_eq!(feed.snapshot().values.soc_pct, Some(68.0));
+        let mut changes = feed.subscribe();
+        let (stop, rx) = tokio::sync::watch::channel(false);
+        let expiry = tokio::spawn(expire_vehicle_feed(feed.clone(), rx));
+        tokio::time::timeout(Duration::from_secs(2), changes.wait_for(|snapshot| snapshot.values.soc_pct.is_none())).await.unwrap().unwrap();
+        assert_eq!(feed.snapshot().telemetry.soc_pct.unwrap().value, 68.0);
+        stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_millis(200), expiry).await.unwrap().unwrap();
+    }
+    #[cfg(feature = "tesla")]
     #[tokio::test]
     async fn stalled_vehicle_worker_cannot_add_a_new_shutdown_wait_after_shared_deadline() {
         use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
@@ -307,6 +361,7 @@ mod platform_tests {
     fn existing_configuration_keeps_f50_private_runtime_and_uci() {
         let c: Config = serde_json::from_value(config()).unwrap();
         assert!(c.bluetooth.is_f50());
+        assert_eq!(c.host(), Host::Openwrt);
         assert_eq!(c.bluetooth.bus(), crate::board::BUS);
         assert_eq!(c.bluetooth.adapter(), 0);
         assert_eq!(c.policy_store().unwrap().path(), std::path::Path::new(crate::policy::DEFAULT_PATH));
@@ -318,6 +373,7 @@ mod platform_tests {
         v.as_object_mut().unwrap().remove("bluetooth_address_file");
         let mut c: Config = serde_json::from_value(v).unwrap();
         assert!(!c.bluetooth.is_f50());
+        assert_eq!(c.host(), Host::Linux);
         assert_eq!(c.bluetooth.adapter(), 7);
         assert_eq!(c.bluetooth.bus(), "unix:path=/run/dbus/system_bus_socket");
         assert!(matches!(c.policy_store().unwrap(), crate::policy::Store::Json { .. }));
@@ -325,4 +381,18 @@ mod platform_tests {
         c.uci_config = Some("/synthetic/cowplay.uci".into());
         assert!(c.policy_store().is_err());
     }
+    #[test]
+    fn system_bluetooth_can_use_openwrt_management_with_uci() {
+        let mut v = config();
+        v["bluetooth"] = serde_json::json!({"kind":"system", "adapter":7});
+        v["host"] = serde_json::json!("openwrt");
+        let mut c: Config = serde_json::from_value(v).unwrap();
+        assert!(!c.bluetooth.is_f50());
+        assert_eq!(c.bluetooth.bus(), "unix:path=/run/dbus/system_bus_socket");
+        assert_eq!(c.host(), Host::Openwrt);
+        assert!(matches!(c.policy_store().unwrap(), crate::policy::Store::Uci { .. }));
+        c.uci_config = Some("/synthetic/cowplay.uci".into());
+        assert_eq!(c.policy_store().unwrap().path(), std::path::Path::new("/synthetic/cowplay.uci"));
+    }
+
 }

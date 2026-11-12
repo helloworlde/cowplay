@@ -616,6 +616,11 @@ mod tests {
     }
     #[tokio::test]
     async fn aborting_an_actual_request_closes_its_owned_socket() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        struct DropSignal(Arc<AtomicBool>);
+        impl Drop for DropSignal { fn drop(&mut self) { self.0.store(true, Ordering::SeqCst); } }
+        struct OwnedRequest { raw: Raw, _released: DropSignal }
+        let released = Arc::new(AtomicBool::new(false));
         let (client, server) = std::os::unix::net::UnixDatagram::pair().unwrap();
         client.set_nonblocking(true).unwrap();
         server.set_nonblocking(true).unwrap();
@@ -624,11 +629,15 @@ mod tests {
             filter: false,
         };
         let server = tokio::net::UnixDatagram::from_std(server).unwrap();
-        let task = tokio::spawn(async move { raw.command(READ_NAME, &[]).await });
+        let owned = OwnedRequest { raw, _released: DropSignal(released.clone()) };
+        let task = tokio::spawn(async move {
+            let owned = owned;
+            owned.raw.command(READ_NAME, &[]).await
+        });
         let mut request = [0; 4];
         assert_eq!(server.recv(&mut request).await.unwrap(), 4);
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
-        assert!(server.send(&[4, 14, 4, 1, 0x14, 0x0c, 0]).await.is_err());
+        assert!(released.load(Ordering::SeqCst), "the owned socket is dropped before the cancelled task joins");
     }
 }

@@ -23,8 +23,21 @@ export function append(el: Element, children: Child[]): void {
   }
 }
 export function clear(el: Element, ...children: Child[]): void {
+  const active = document.activeElement as HTMLElement | null;
+  const focusId = active && el.contains(active) ? active.id : '';
   el.replaceChildren();
   append(el, children);
+  if (focusId) document.getElementById(focusId)?.focus({preventScroll: true});
+}
+export function radioKeys(event: Event): void {
+  const e = event as KeyboardEvent;
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+  const buttons = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="radio"]:not(:disabled)')];
+  const index = buttons.indexOf(e.target as HTMLButtonElement);
+  if (index < 0) return;
+  e.preventDefault();
+  const next = buttons[(index + (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length];
+  next.focus(); next.click();
 }
 export const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 

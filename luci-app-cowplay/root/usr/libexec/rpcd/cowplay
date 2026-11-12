@@ -3,20 +3,20 @@
 case "$1" in
 list)
 cat <<'JSON'
-{"update_status":{},"update_check":{"tag":""},"update_apply":{"id":""},"update_prepare":{"id":""},"update_acknowledge":{"id":""},"status":{},"service_info":{},"network_check":{"port":0},"network_prepare":{"port":0,"fingerprint":"","management_scheme":"","management_port":0},"network_commit":{"id":""},"network_status":{"id":""},"network_confirm":{"id":"","management_scheme":"","management_port":0},"network_cancel":{"id":""},"network_recover":{"id":""},"diag":{},"phones":{},"screens":{},"logs":{"level":"","limit":0,"module":""},"timeline":{"scope":""},"proc":{},"token":{},"cert":{},"config_export":{},"cmd":{"cmd":"","id":""},"client_remove":{"id":""},"token_reset":{},"reload":{},"selftest":{},"bundle":{},"ddns_sync":{},"ddns_token":{"token":""},"mfi_upload":{"certificate":"","private_key":""},"cert_upload":{"cert":"","key":""},"cert_rollback":{},"cert_renew":{},"config_import":{"text":""},"factory_reset":{},"service":{"action":""}}
+{"status":{},"service_info":{},"network_check":{"port":0},"network_prepare":{"port":0,"fingerprint":"","management_scheme":"","management_port":0},"network_commit":{"id":""},"network_status":{"id":""},"network_confirm":{"id":"","management_scheme":"","management_port":0},"network_cancel":{"id":""},"network_recover":{"id":""},"diag":{},"phones":{},"screens":{},"logs":{"level":"","limit":0,"module":""},"logs_export":{},"timeline":{"scope":""},"proc":{},"token":{},"cert":{},"certificate_export":{"kind":""},"config_export":{},"cmd":{"cmd":"","id":""},"client_remove":{"id":""},"token_reset":{},"reload":{},"selftest":{},"bundle":{},"ddns_sync":{},"ddns_token":{"token":""},"mfi_upload":{"certificate":"","private_key":""},"cert_upload":{"cert":"","key":""},"cert_rollback":{},"cert_renew":{},"config_import":{"text":""},"factory_reset":{},"service":{"action":""},"network_info":{},"tesla_status":{},"tesla_configure":{"vin":null,"enabled":false},"tesla_connect":{},"tesla_disconnect":{},"tesla_pair":{},"tesla_cancel":{},"tesla_climate_pair":{},"tesla_climate_query":{},"tesla_ultra_control":{"enabled":false,"session":0,"context":0},"tesla_climate_command":{"action":"","on":false,"driver_celsius":0.0,"passenger_celsius":0.0},"update_status":{},"update_check":{"tag":""},"update_apply":{"id":""},"update_acknowledge":{"id":""}}
 JSON
 ;;
 call)
     method=$2
     input=$(cat)
     case "$method" in
-    update_status|update_check|update_apply|update_prepare|update_acknowledge)
+    update_status|update_check|update_apply|update_acknowledge)
         printf '%s' "$input" | /usr/bin/cowplay update "${method#update_}"
         exit $? ;;
     esac
     if [ -e /etc/cowplay/updates/active ]; then
         case "$method" in
-        status|service_info|diag|phones|screens|logs|timeline|proc|token|cert|config_export|network_check|network_status) ;;
+        status|service_info|diag|phones|screens|logs|timeline|proc|cert|certificate_export|config_export|network_info|network_check|network_status|tesla_status) ;;
         *) printf '%s\n' '{"error":"软件更新任务尚未结束；请先检查系统页中的任务状态"}'; exit 0 ;;
         esac
     fi
@@ -43,7 +43,7 @@ call)
         case "$action" in start|restart|stop|enable|disable) ;; *) printf '%s\n' '{"error":"无效服务操作"}'; exit 0 ;; esac
         if /etc/init.d/cowplay "$action" >/dev/null 2>&1; then printf '%s\n' '{"ok":true}'; else printf '%s\n' '{"error":"服务操作失败，请检查系统日志"}'; fi
         exit 0 ;;
-    status|diag|phones|screens|logs|timeline|proc|config_export|cmd|client_remove|reload|selftest|bundle|ddns_sync|ddns_token|config_import|factory_reset|mfi_upload) ;;
+    status|diag|phones|screens|logs|logs_export|timeline|proc|certificate_export|config_export|cmd|client_remove|reload|selftest|bundle|ddns_sync|ddns_token|config_import|factory_reset|mfi_upload|network_info|tesla_status|tesla_configure|tesla_connect|tesla_disconnect|tesla_pair|tesla_cancel|tesla_climate_pair|tesla_climate_query|tesla_climate_command|tesla_ultra_control) ;;
     *) printf '%s\n' '{"error":"未知管理操作"}'; exit 0 ;;
     esac
     printf '%s' "$input" | /usr/bin/cowplay ctl "$method"

@@ -178,6 +178,16 @@ fn version(s: &str) -> Result<[u32; 4]> {
     }
     Ok(out)
 }
+fn release_tag(package_version: &str) -> String {
+    format!("v{}", package_version.strip_suffix("-r0").unwrap_or(package_version))
+}
+fn tag_version(tag: &str) -> Result<[u32; 4]> {
+    let value = tag.strip_prefix('v').ok_or("发布标签必须为 vX.Y.Z 或 vX.Y.Z-rN")?;
+    let package = if value.contains("-r") { value.to_owned() } else { format!("{value}-r0") };
+    let parsed = version(&package)?;
+    if release_tag(&package) != tag { return Err("发布标签格式不规范".into()); }
+    Ok(parsed)
+}
 fn source(p: &Paths) -> Result<Source> {
     let config = p.at("etc/cowplay/releases.json");
     let m = fs::symlink_metadata(&config)
@@ -305,7 +315,7 @@ fn validate(
     if m.schema != 1
         || m.repository != s.repository
         || m.tag != tag
-        || tag != format!("v{}", m.version)
+        || tag != release_tag(&m.version)
         || m.platform != "openwrt-apk"
         || m.arch != arch
         || !m.openwrt_releases.iter().any(|v| v == release)
@@ -333,8 +343,14 @@ fn validate(
     for v in &m.upgrade_from {
         version(v)?;
     }
+    // One explicitly reviewed transition from the pre-release numbering scheme.
+    // A partial/mixed install or any other downgrade still needs manual review.
+    let first_release_migration = m.version == "0.0.1-r0"
+        && m.upgrade_from.iter().any(|v| v == "0.3.14-r34")
+        && current.len() == NAMES.len()
+        && NAMES.iter().all(|name| current.get(*name).is_some_and(|v| v == "0.3.14-r34"));
     for old in current.values() {
-        if version(old)? > target {
+        if version(old)? > target && !first_release_migration {
             return Err("拒绝降级；请单独审查旧程序与状态兼容性".into());
         }
         if old != &m.version && !m.upgrade_from.contains(old) {
@@ -505,7 +521,7 @@ async fn check(p: &Paths, j: &mut Job) -> Result<()> {
     let tag = release_info["tag_name"]
         .as_str()
         .ok_or("GitHub 发布缺少标签")?;
-    version(tag.strip_prefix('v').ok_or("发布标签必须为 vX.Y.Z-rN")?)?;
+    tag_version(tag)?;
     if !j.tag.is_empty() && j.tag != tag {
         return Err("GitHub 返回的标签与所选版本不符".into());
     }
@@ -1053,6 +1069,37 @@ fn status(p: &Paths) -> Result<Value> {
 pub async fn cli(action: &str, input: &Value) -> Result<Value> {
     cli_at(&Paths::live(), action, input).await
 }
+
+/// Local administrator bootstrap, invoked only after the downloaded executable's
+/// release signature has been checked. Never exposed through rpcd.
+pub fn bootstrap() -> Result<()> {
+    bootstrap_at(&Paths::live(), include_bytes!("../packaging/release-key.pem"))
+}
+fn bootstrap_at(p: &Paths, key: &[u8]) -> Result<()> {
+    let dir = p.at("etc/cowplay");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let metadata = fs::symlink_metadata(&dir).map_err(|e| e.to_string())?;
+    if !metadata.is_dir() || metadata.permissions().mode() & 0o022 != 0
+        || p.root == Path::new("/") && metadata.uid() != 0 {
+        return Err("发布配置目录必须由管理员控制，不能是链接".into());
+    }
+    let _guard = lock(&dir.join("release-bootstrap.lock"))?;
+    let config = p.at("etc/cowplay/releases.json");
+    let public_key = p.at("etc/cowplay/release-key.pem");
+    if fs::symlink_metadata(&config).is_ok() || fs::symlink_metadata(&public_key).is_ok() {
+        let existing = source(p)?;
+        if existing.repository != "helloworlde/cowplay" || read(&public_key, 16384)? != key {
+            return Err("已有不同的发布来源或公钥，未替换；请管理员核对".into());
+        }
+        return Ok(());
+    }
+    write(&public_key, key)?;
+    if let Err(error) = write(&config, b"{\"repository\":\"helloworlde/cowplay\"}\n") {
+        let _ = fs::remove_file(&public_key);
+        return Err(error);
+    }
+    Ok(())
+}
 async fn cli_at(p: &Paths, action: &str, input: &Value) -> Result<Value> {
     if action == "status" {
         let mut value = status(p)?;
@@ -1094,7 +1141,7 @@ async fn cli_at(p: &Paths, action: &str, input: &Value) -> Result<Value> {
             let s = source(p)?;
             let tag = input["tag"].as_str().unwrap_or("");
             if !tag.is_empty() {
-                version(tag.strip_prefix('v').ok_or("标签必须为 vX.Y.Z-rN")?)?;
+                tag_version(tag)?;
             }
             let mut random = [0; 16];
             fs::File::open("/dev/urandom")
@@ -1204,7 +1251,7 @@ mod tests {
         Manifest {
             schema: 1,
             repository: "example/cowplay".into(),
-            tag: "v0.3.15-r0".into(),
+            tag: "v0.3.15".into(),
             version: "0.3.15-r0".into(),
             platform: "openwrt-apk".into(),
             openwrt_releases: vec!["25.12.6".into()],
@@ -1236,7 +1283,7 @@ mod tests {
             source: Source {
                 repository: "example/cowplay".into(),
             },
-            tag: "v0.3.15-r0".into(),
+            tag: "v0.3.15".into(),
             manifest: Some(manifest()),
             installed: NAMES
                 .iter()
@@ -1382,6 +1429,38 @@ esac
     }
     fn events(p: &Paths) -> String {
         fs::read_to_string(p.at("events")).unwrap_or_default()
+    }
+    #[test]
+    fn first_release_migrates_only_complete_r34_and_uses_canonical_tags() {
+        assert_eq!(release_tag("0.0.1-r0"), "v0.0.1");
+        assert_eq!(release_tag("0.0.1-r1"), "v0.0.1-r1");
+        assert_eq!(tag_version("v0.0.1").unwrap(), [0, 0, 1, 0]);
+        assert!(tag_version("v0.0.1-r0").is_err());
+        assert!(tag_version("v0.0.1/evil").is_err());
+        let mut m = manifest(); m.version = "0.0.1-r0".into(); m.tag = "v0.0.1".into();
+        m.upgrade_from = vec!["0.3.14-r34".into()];
+        for pkg in &mut m.packages { pkg.file = format!("{}-{}-{}.apk", pkg.name, m.version, pkg.arch); }
+        let source = job().source;
+        let pair = |v: &str| NAMES.iter().map(|n| (n.to_string(), v.to_owned())).collect::<BTreeMap<_,_>>();
+        let valid = |m: &Manifest, current: &BTreeMap<String, String>| validate(m, &source, &m.tag, "aarch64_generic", "25.12.6", current);
+        assert!(valid(&m, &pair("0.3.14-r34")).is_ok());
+        assert!(valid(&m, &pair("0.0.1-r0")).is_ok());
+        for old in ["0.3.14-r33", "0.3.14-r35", "0.0.2-r0"] { assert!(valid(&m, &pair(old)).is_err()); }
+        let mut mixed = pair("0.3.14-r34"); mixed.insert("luci-app-cowplay".into(), "0.0.1-r0".into());
+        assert!(valid(&m, &mixed).is_err()); mixed.remove("luci-app-cowplay"); assert!(valid(&m, &mixed).is_err());
+        m.upgrade_from.clear(); assert!(valid(&m, &pair("0.3.14-r34")).is_err());
+    }
+    #[test]
+    fn bootstrap_is_idempotent_and_never_replaces_existing_trust() {
+        let temp = tempfile::tempdir().unwrap(); let p = Paths { root: temp.path().to_owned() };
+        let key = include_bytes!("../packaging/release-key.pem");
+        bootstrap_at(&p, key).unwrap(); bootstrap_at(&p, key).unwrap();
+        assert_eq!(source(&p).unwrap().repository, "helloworlde/cowplay");
+        assert!(bootstrap_at(&p, b"different key").is_err());
+        assert_eq!(read(&p.at("etc/cowplay/release-key.pem"), 16384).unwrap(), key);
+        write(&p.at("etc/cowplay/releases.json"), b"{\"repository\":\"example/other\"}").unwrap();
+        assert!(bootstrap_at(&p, key).is_err());
+        assert_eq!(source(&p).unwrap().repository, "example/other");
     }
     #[test]
     fn versions_sources_and_release_contract() {
@@ -1761,7 +1840,7 @@ esac; done
             let dest = dir.path().join("asset");
             let result = download(
                 &client,
-                "https://github.com/example/cowplay/releases/download/v0.3.15-r0/asset",
+                "https://github.com/example/cowplay/releases/download/v0.3.15/asset",
                 &dest,
                 4,
             )

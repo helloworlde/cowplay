@@ -1,9 +1,11 @@
-//! Tesla vehicle-command read-only protocol. Source/fixtures pinned in research/tesla-ble-lock.json.
-//! P-256/ring perform cryptography; this module implements only wire metadata and GetState.
+//! Tesla vehicle-command telemetry and limited HVAC. Sources pinned in research/tesla-ble-lock.json.
+//! P-256/ring perform cryptography; vehicle commands are restricted to HVAC power and temperature.
+mod climate;
 mod proto;
 mod session;
+pub use climate::{ClimateCommand, ClimateState};
 use proto::Message;
-pub use session::{Client, Identity};
+pub use session::{Client, EnrollmentPermission, Identity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {

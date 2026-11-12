@@ -22,34 +22,27 @@ pub struct ImportedIdentity {
     key: SigningKey,
     certificate: Vec<u8>,
 }
+pub fn public_certificate(blob: &[u8]) -> Result<x509_cert::Certificate> {
+    if blob.is_empty() || blob.len() > 16384 { return Err(Error::Limit); }
+    if let Ok(cert) = x509_cert::Certificate::from_der(blob) { return Ok(cert); }
+    let info = cms::content_info::ContentInfo::from_der(blob).map_err(|_| Error::Malformed)?;
+    if info.content_type.to_string() != "1.2.840.113549.1.7.2" { return Err(Error::Malformed); }
+    let signed = cms::signed_data::SignedData::from_der(&info.content.to_der().map_err(|_| Error::Malformed)?)
+        .map_err(|_| Error::Malformed)?;
+    let certs = signed.certificates.ok_or(Error::Malformed)?;
+    if certs.0.len() != 1 { return Err(Error::Malformed); }
+    match certs.0.iter().next().ok_or(Error::Malformed)? {
+        cms::cert::CertificateChoices::Certificate(cert) => Ok(cert.clone()),
+        _ => Err(Error::Malformed),
+    }
+}
 impl ImportedIdentity {
     pub fn from_pkcs8_and_certificate(pkcs8: &[u8], blob: &[u8]) -> Result<Self> {
         if pkcs8.len() > 16384 || blob.len() > 16384 || blob.is_empty() {
             return Err(Error::Limit);
         }
         let key = SigningKey::from_pkcs8_der(pkcs8).map_err(|_| Error::Authentication)?;
-        let cert = match x509_cert::Certificate::from_der(blob) {
-            Ok(c) => c,
-            Err(_) => {
-                let info =
-                    cms::content_info::ContentInfo::from_der(blob).map_err(|_| Error::Malformed)?;
-                if info.content_type.to_string() != "1.2.840.113549.1.7.2" {
-                    return Err(Error::Malformed);
-                }
-                let signed = cms::signed_data::SignedData::from_der(
-                    &info.content.to_der().map_err(|_| Error::Malformed)?,
-                )
-                .map_err(|_| Error::Malformed)?;
-                let certs = signed.certificates.ok_or(Error::Malformed)?;
-                if certs.0.len() != 1 {
-                    return Err(Error::Malformed);
-                }
-                match certs.0.iter().next().ok_or(Error::Malformed)? {
-                    cms::cert::CertificateChoices::Certificate(c) => c.clone(),
-                    _ => return Err(Error::Malformed),
-                }
-            }
-        };
+        let cert = public_certificate(blob)?;
         let spki = cert
             .tbs_certificate
             .subject_public_key_info

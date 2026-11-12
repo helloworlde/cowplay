@@ -32,17 +32,22 @@ pub async fn supervise_on(settings_path: PathBuf, feed: Arc<Feed>, mut service_s
             .ok_or("invalid Tesla configuration path")
             .map_err(|e| e.to_owned())
             .and_then(|path| match f50_server::settings::read(path, 4096) {
-                Ok(bytes) => serde_json::from_slice::<Config>(&bytes)
+                Ok(bytes) => super::management::monitor_configuration(&bytes)
                     .map(Some)
                     .map_err(|_| "invalid Tesla BLE configuration".to_owned()),
                 Err(_) if !settings_path.exists() => Ok(None),
                 Err(_) => Err("Tesla BLE configuration unreadable".into()),
             });
         let config = match config {
-            Ok(Some(config)) => {
+            Ok(Some((config, true))) => {
                 feed.reset();
                 feed.status(true, false, "connecting");
                 config
+            }
+            Ok(Some((_, false))) => {
+                feed.reset();
+                feed.status(false, false, "disabled");
+                tokio::select! {_=service_stop.changed()=>break,_=retry.changed()=>continue}
             }
             other => {
                 if other.is_err() {
@@ -94,7 +99,17 @@ pub fn keygen(path: &Path) -> Result<Vec<u8>> {
 pub async fn enroll(config: Config, stop: watch::Receiver<bool>) -> Result<()> {
     enroll_on(config, stop, crate::board::BUS, 0).await
 }
-pub async fn enroll_on(config: Config, mut stop: watch::Receiver<bool>, bus: &str, adapter: u16) -> Result<()> {
+pub async fn enroll_on(config: Config, stop: watch::Receiver<bool>, bus: &str, adapter: u16) -> Result<()> {
+    enroll_with_progress(config, stop, bus, adapter, |phase| match phase {
+        "awaiting_confirmation" => println!("已发送只读Vehicle Monitor公钥授权请求。请在车内刷NFC钥匙卡并确认，等待车辆验证；私钥不离开本机。"),
+        "authorized" => println!("Tesla已验证本机公钥授权；未发送车辆控制命令。"),
+        _ => {},
+    }).await
+}
+pub(super) async fn enroll_with_progress(config: Config, stop: watch::Receiver<bool>, bus: &str, adapter: u16, progress: impl Fn(&'static str) + Send) -> Result<()> {
+    enroll_for(config, stop, bus, adapter, f50_core::tesla::EnrollmentPermission::VehicleMonitor, progress).await
+}
+pub(super) async fn enroll_for(config: Config, mut stop: watch::Receiver<bool>, bus: &str, adapter: u16, permission: f50_core::tesla::EnrollmentPermission, progress: impl Fn(&'static str) + Send) -> Result<()> {
     let bytes = f50_server::settings::read(
         config
             .private_key
@@ -103,19 +118,19 @@ pub async fn enroll_on(config: Config, mut stop: watch::Receiver<bool>, bus: &st
         4096,
     )?;
     let identity = Identity::from_pkcs8(&bytes)?;
-    let request = identity.enrollment_request();
+    let request = identity.enrollment_request_for(permission);
     let mut client = Client::new(&config.vin, identity)?;
     let mut link = Link::open_on(bus, &client.local_name(), stop.clone(), adapter).await?;
     let result=async{
         link.send(&request,&mut stop).await?;
-        println!("已发送只读Vehicle Monitor公钥授权请求。请在车内刷NFC钥匙卡并确认，等待车辆验证；私钥不离开F50。");
+        progress("awaiting_confirmation");
         for _ in 0..12 {
             if *stop.borrow(){return Err::<(),Box<dyn std::error::Error+Send+Sync>>("Tesla enrollment cancelled".into());}
             let handshake=tokio::time::timeout(Duration::from_secs(4),async{
                 link.send(&client.hello(),&mut stop).await?;
                 loop {let bytes=link.receive(&mut stop).await?;if client.accept_hello(&bytes)?{return Ok::<_,Box<dyn std::error::Error+Send+Sync>>(());}}
             }).await;
-            if matches!(handshake,Ok(Ok(()))){println!("Tesla已验证F50公钥授权；未发送车辆控制命令。");return Ok(());}
+            if matches!(handshake,Ok(Ok(()))){progress("authorized");return Ok(());}
             tokio::select!{_=stop.changed()=>return Err("Tesla enrollment cancelled".into()),_=tokio::time::sleep(Duration::from_secs(2))=>{}}
         }Err("Tesla公钥授权未在有界窗口内完成；保留密钥，确认车辆权限后重试".into())
     }.await;
@@ -126,7 +141,7 @@ pub async fn enroll_on(config: Config, mut stop: watch::Receiver<bool>, bus: &st
 pub async fn run(config: Config, feed: Arc<Feed>, stop: watch::Receiver<bool>) -> Result<()> {
     run_on(config, feed, stop, crate::board::BUS, 0).await
 }
-async fn run_on(config: Config, feed: Arc<Feed>, mut stop: watch::Receiver<bool>, bus: &str, adapter: u16) -> Result<()> {
+pub(super) async fn run_on(config: Config, feed: Arc<Feed>, mut stop: watch::Receiver<bool>, bus: &str, adapter: u16) -> Result<()> {
     let bytes = f50_server::settings::read(
         config
             .private_key
@@ -138,16 +153,6 @@ async fn run_on(config: Config, feed: Arc<Feed>, mut stop: watch::Receiver<bool>
     let mut client = Client::new(&config.vin, identity)?;
     let mut failures = 0u8;
     let mut health = ReadHealth::default();
-    let mut expiry = tokio::time::interval(Duration::from_secs(1));
-    expiry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Expiry runs even while discovery/authorization is in progress or a read is waiting.
-    let (expiry_stop, mut expired) = watch::channel(false);
-    let expiry_feed = feed.clone();
-    let expiry_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {_=expired.changed()=>break,_=expiry.tick()=>expiry_feed.tick()}
-        }
-    });
     let result=async{
         loop {
             if *stop.borrow(){break Ok(());}
@@ -169,7 +174,7 @@ async fn run_on(config: Config, feed: Arc<Feed>, mut stop: watch::Receiver<bool>
             let cleanup=link.close().await;feed.status(true,false,if *stop.borrow(){"stopped"}else{phase});
             if cleanup.is_err(){feed.status(true,false,"cleanup_failed");break Err("Tesla BLE cleanup failed; not retrying an uncertain connection".into());}
             if *stop.borrow(){break Ok(());}
-            if reading.as_ref().err().is_some_and(|e|e.downcast_ref::<f50_core::tesla::Error>()==Some(&f50_core::tesla::Error::NotAuthorized)) {feed.status(true,false,"not_authorized");break Err("Tesla has not authorized this F50 public key".into());}
+            if reading.as_ref().err().is_some_and(|e|e.downcast_ref::<f50_core::tesla::Error>()==Some(&f50_core::tesla::Error::NotAuthorized)) {feed.status(true,false,"not_authorized");break Err("Tesla has not authorized this receiver public key".into());}
             if reading.as_ref().err().is_some_and(|e|e.downcast_ref::<ProtocolError>()==Some(&ProtocolError::Exhausted)) {
                 feed.status(true,false,"read_attempts_exhausted");break Err("Tesla read attempts exhausted; explicit retry required".into());
             }
@@ -178,8 +183,6 @@ async fn run_on(config: Config, feed: Arc<Feed>, mut stop: watch::Receiver<bool>
             tokio::select!{_=stop.changed()=>break Ok(()),_=tokio::time::sleep(Duration::from_secs(u64::from(failures)*2))=>{}}
         }
     }.await;
-    let _ = expiry_stop.send(true);
-    let _ = expiry_task.await;
     if *stop.borrow() {
         feed.status(true, false, "stopped");
     }

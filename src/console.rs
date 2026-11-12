@@ -198,6 +198,11 @@ fn parse_iw_info(text: &str) -> Value {
     }
     json!({"ssid": ssid, "channel": channel, "width_mhz": width, "ap": ap})
 }
+fn wifi_interface(ifaces: &[(String,String)], preferred: &str, ssid: Option<&str>) -> Option<String> {
+    let ssid = ssid?;
+    ifaces.iter().find(|(i,s)| i==preferred && s==ssid)
+        .or_else(||ifaces.iter().find(|(_,s)|s==ssid)).map(|(i,_)|i.clone())
+}
 pub async fn sample_wifi(a: &Admin) {
     let peer = diag().peer();
     if a.sys.lock().unwrap().wifi.as_ref().is_some_and(|(v, t)| t.elapsed() < Duration::from_secs(5) && v["peer_ip"].as_str() == peer.as_deref()) {
@@ -206,13 +211,8 @@ pub async fn sample_wifi(a: &Admin) {
     let policy = a.policy();
     let ifaces = crate::admin::iw_interfaces().await;
     let wanted_ssid = a.wifi.as_ref().map(|(s, _)| s.clone());
-    let iface = ifaces
-        .iter()
-        .find(|(i, _)| !policy.wifi_iface.is_empty() && *i == policy.wifi_iface)
-        .or_else(|| ifaces.iter().find(|(_, s)| Some(s) == wanted_ssid.as_ref()))
-        .or(ifaces.first())
-        .map(|(i, _)| i.clone());
-    let mut value = json!({"iface": iface, "ssid": wanted_ssid, "channel": a.wifi.as_ref().map(|w| w.1), "width_mhz": null, "clients": null, "phone": null,"peer_ip":peer,"phone_status":"no_interface"});
+    let iface = wifi_interface(&ifaces,&policy.wifi_iface,wanted_ssid.as_deref());
+    let mut value = json!({"iface": iface, "ssid": if iface.is_some() {wanted_ssid.clone()}else{None}, "channel": null, "configured_ssid":wanted_ssid,"configured_channel":a.wifi.as_ref().map(|w|w.1),"source":"iw dev / station dump; only matching CarPlay SSID", "width_mhz": null, "clients": null, "phone": null,"peer_ip":peer,"phone_status":"no_interface"});
     if let Some(i) = &iface {
         value["phone_status"] = json!("query_failed");
         if let Some(info) = run_bounded("iw", &["dev", i, "info"]).await {
@@ -248,7 +248,6 @@ pub async fn sample_wifi(a: &Admin) {
 fn station_status(stations: &[(String,Value)], mac: Option<&str>, connected: bool, nonempty: bool) -> &'static str {
     if !connected { return "disconnected"; }
     if stations.is_empty() && nonempty { return "query_failed"; }
-    if !stations.is_empty() && stations.iter().all(|(_,s)| s["signal"].is_null() && s["rate_mbps"].is_null()) { return "driver_unavailable"; }
     let Some(mac) = mac else { return "unidentified"; };
     match stations.iter().find(|(m,_)| m==mac) {
         Some((_,s)) if s["signal"].is_number() && s["rate_mbps"].is_number() => "available",
@@ -278,7 +277,8 @@ pub fn stats(a: &Admin) -> Value {
     let wifi = a.sys.lock().unwrap().wifi.as_ref().map(|(v,t)|station_for_peer(v,t.elapsed(),peer.as_deref())).unwrap_or(Value::Null);
     let sample = a.hub.viewer_client().and_then(|id| diag().viewer_sample_for(&id, a.hub.viewer_generation()));
     let report_age = sample.as_ref().map(|(age, _)| age.as_millis() as u64);
-    let report = sample.filter(|(age, _)| *age < Duration::from_secs(5))
+    let last_report = sample.as_ref().and_then(|(_, report)| serde_json::to_value(report).ok()).unwrap_or(Value::Null);
+    let report = sample.as_ref().filter(|(age, _)| *age < Duration::from_secs(5))
         .and_then(|(_, report)| serde_json::to_value(report).ok()).unwrap_or(Value::Null);
     let spec = a.hub.display_spec();
     let (session, _) = diag().sessions();
@@ -293,6 +293,7 @@ pub fn stats(a: &Admin) -> Value {
         "spec": spec,
         "server": m["server"],
         "car": report,
+        "car_last_report": last_report,
         "car_sample_age_ms": report_age,
         "history": m["history"],
         "stalls_10m": stalls_10m,
@@ -311,7 +312,7 @@ pub fn stats(a: &Admin) -> Value {
             "rssi": phone["rssi_dbm"].as_i64().or(wifi["phone"]["signal"].as_i64()),
             "rate_mbps": wifi["phone"]["rate_mbps"],
             "retry_pct": wifi["phone"]["retry_pct"],
-            "associated": wifi["phone"]["associated"].as_bool().unwrap_or(false),
+            "associated": wifi["phone"]["associated"].as_bool(),
             "bt": if a.manager.status().rfcomm { Some("iAP2") } else { None },
             "wifi_status": wifi["phone_status"],
             "model": session.as_ref().and_then(|s| s.model.clone()),
@@ -367,7 +368,8 @@ pub fn diagnosis(a: &Admin) -> Value {
         .map(|e| json!({"level": e.kind, "title": e.msg, "cause": e.detail, "ts_ms": e.ts_ms})).collect();
     result["events"] = json!(events);
     result["code"] = json!(diag().diag_code());
-    result["selftest"] = json!(a.selftest.lock().unwrap().clone());
+    result["context"] = connection_context(a);
+    result["selftest"] = json!(a.current_selftest());
     result
 }
 
@@ -381,17 +383,17 @@ fn diagnosis_samples(s: &Value, quality: &str, link: &f50_server::diag::Link, co
     let target_fps = incoming.unwrap_or(cap).min(cap);
     let stalls = s["stalls_10m"].as_u64().unwrap_or(0) as f64;
     let checks = vec![
-        Check { group: "车机 ⟷ F50", name: "延迟", value: car["rtt_ms"].as_f64(), text: fmt(car["rtt_ms"].as_f64(), 0, "ms"), limit: 30.0, upper: true, unit: "ms" },
-        Check { group: "车机 ⟷ F50", name: "抖动", value: car["jitter_ms"].as_f64(), text: fmt(car["jitter_ms"].as_f64(), 0, "ms"), limit: 10.0, upper: true, unit: "ms" },
-        Check { group: "车机 ⟷ F50", name: "丢包", value: car["loss_pct"].as_f64(), text: fmt(car["loss_pct"].as_f64(), 1, "%"), limit: 1.0, upper: true, unit: "%" },
-        Check { group: "F50 ⟷ iPhone", name: "信号", value: phone["rssi"].as_f64(), text: phone["rssi"].as_f64().map(|v| format!("{} dBm", v.round()).replace('-', "−")).unwrap_or("—".into()), limit: -70.0, upper: false, unit: "dBm" },
-        Check { group: "F50 ⟷ iPhone", name: "速率", value: phone["rate_mbps"].as_f64(), text: fmt(phone["rate_mbps"].as_f64(), 0, "Mbps"), limit: 0.0, upper: false, unit: "Mbps" },
-        Check { group: "F50 ⟷ iPhone", name: "重传", value: phone["retry_pct"].as_f64(), text: fmt(phone["retry_pct"].as_f64(), 1, "%"), limit: 5.0, upper: true, unit: "%" },
+        Check { group: "车机 ⟷ 接收端", name: "延迟", value: car["rtt_ms"].as_f64(), text: fmt(car["rtt_ms"].as_f64(), 0, "ms"), limit: 30.0, upper: true, unit: "ms" },
+        Check { group: "车机 ⟷ 接收端", name: "抖动", value: car["jitter_ms"].as_f64(), text: fmt(car["jitter_ms"].as_f64(), 0, "ms"), limit: 10.0, upper: true, unit: "ms" },
+        Check { group: "车机 ⟷ 接收端", name: "丢包", value: car["loss_pct"].as_f64(), text: fmt(car["loss_pct"].as_f64(), 1, "%"), limit: 1.0, upper: true, unit: "%" },
+        Check { group: "接收端 ⟷ iPhone", name: "信号", value: phone["rssi"].as_f64(), text: phone["rssi"].as_f64().map(|v| format!("{} dBm", v.round()).replace('-', "−")).unwrap_or("—".into()), limit: -70.0, upper: false, unit: "dBm" },
+        Check { group: "接收端 ⟷ iPhone", name: "速率", value: phone["rate_mbps"].as_f64(), text: fmt(phone["rate_mbps"].as_f64(), 0, "Mbps"), limit: 0.0, upper: false, unit: "Mbps" },
+        Check { group: "接收端 ⟷ iPhone", name: "重传", value: phone["retry_pct"].as_f64(), text: fmt(phone["retry_pct"].as_f64(), 1, "%"), limit: 5.0, upper: true, unit: "%" },
         Check { group: "画面", name: "帧率", value: car["fps"].as_f64().filter(|_| streaming), text: fmt(car["fps"].as_f64().filter(|_| streaming), 1, "fps"), limit: (target_fps - 5.0).max(0.0), upper: false, unit: "fps" },
         Check { group: "画面", name: "解码", value: car["decode_ms"].as_f64().filter(|_| streaming), text: fmt(car["decode_ms"].as_f64().filter(|_| streaming), 1, "ms"), limit: 12.0, upper: true, unit: "ms" },
         Check { group: "画面", name: "停住", value: Some(stalls), text: if stalls > 0.0 { format!("{stalls} 次/10 分") } else { "0 次".into() }, limit: 0.5, upper: true, unit: "次" },
-        Check { group: "F50", name: "CPU", value: f50["cpu"].as_f64(), text: fmt(f50["cpu"].as_f64(), 0, "%"), limit: 70.0, upper: true, unit: "%" },
-        Check { group: "F50", name: "温度", value: f50["temp"].as_f64(), text: fmt(f50["temp"].as_f64(), 0, "°C"), limit: 75.0, upper: true, unit: "°C" },
+        Check { group: "接收端", name: "CPU", value: f50["cpu"].as_f64(), text: fmt(f50["cpu"].as_f64(), 0, "%"), limit: 70.0, upper: true, unit: "%" },
+        Check { group: "接收端", name: "温度", value: f50["temp"].as_f64(), text: fmt(f50["temp"].as_f64(), 0, "°C"), limit: 75.0, upper: true, unit: "°C" },
     ];
     let rate_ratio = |c: &Check| if c.name == "速率" { c.value.map(|v| (200.0 / v.max(1.0)).clamp(0.05, 1.0) * 0.5).unwrap_or(0.0) } else { c.ratio() };
     let frame_reference = if streaming { format!("≥ {:.1} fps（输入 {:.1}，上限 {:.1}）", (target_fps - 5.0).max(0.0), incoming.unwrap_or(0.0), cap) } else { "跟随源画面更新".into() };
@@ -411,7 +413,7 @@ fn diagnosis_samples(s: &Value, quality: &str, link: &f50_server::diag::Link, co
                 "CPU" => "< 70 %",
                 _ => "< 75 °C",
             };
-            json!({"group": c.group, "name": c.name, "value": c.value, "text": c.text, "limit": limit, "ratio": rate_ratio(c), "ok": !c.bad(), "known": c.value.is_some()})
+            json!({"group": c.group, "name": c.name, "value": c.value, "text": c.text, "limit": limit, "ratio": rate_ratio(c), "ok": c.value.map(|_| !c.bad()), "known": c.value.is_some()})
         })
         .collect();
     let jitter = checks[1].value;
@@ -419,21 +421,23 @@ fn diagnosis_samples(s: &Value, quality: &str, link: &f50_server::diag::Link, co
     let verdict = if let Some(e) = link.error.as_ref().filter(|e| diag::now_ms().saturating_sub(e.ts_ms) < 30 * 60_000) {
         json!({"level": "error", "title": e.title, "detail": e.hint, "action": null})
     } else if checks[1].bad() {
-        json!({"level": "warn", "title": "车机到 F50 的往返响应波动较大", "detail": format!("抖动 {}（参考 < 10 ms）{}。请结合动态画面、请求超时和设备负载判断是否影响使用。", checks[1].text, if stalls > 0.0 { format!("，最近 10 分钟记录 {stalls} 次绘制恢复") } else { String::new() }), "action": null})
+        json!({"level": "warn", "title": "车机到接收端的往返响应波动较大", "detail": format!("抖动 {}（参考 < 10 ms）{}。请结合动态画面、请求超时和设备负载判断是否影响使用。", checks[1].text, if stalls > 0.0 { format!("，最近 10 分钟记录 {stalls} 次绘制恢复") } else { String::new() }), "action": null})
     } else if checks[2].bad() {
-        json!({"level": "warn", "title": "车机到 F50 的网络丢包偏多", "detail": format!("丢包 {}（正常 < 1 %）。请检查当前网络连接及两端设备负载。", checks[2].text), "action": if quality != "smooth" { fix("切到流畅（30 帧）") } else { Value::Null }})
+        json!({"level": "warn", "title": "车机到接收端的网络丢包偏多", "detail": format!("丢包 {}（正常 < 1 %）。请检查当前网络连接及两端设备负载。", checks[2].text), "action": if quality != "smooth" { fix("切到流畅（30 帧）") } else { Value::Null }})
     } else if checks[3].bad() || checks[5].bad() {
-        json!({"level": "warn", "title": "iPhone 到 F50 的 Wi‑Fi 信号偏弱", "detail": format!("信号 {} · 重传 {}（正常 > −70 dBm、< 5 %）。让 iPhone 离 F50 近一些。", checks[3].text, checks[5].text), "action": if quality != "smooth" { fix("切到流畅（30 帧）") } else { Value::Null }})
+        json!({"level": "warn", "title": "iPhone 到接收端的 Wi‑Fi 信号偏弱", "detail": format!("信号 {} · 重传 {}（正常 > −70 dBm、< 5 %）。让 iPhone 靠近接收端。", checks[3].text, checks[5].text), "action": if quality != "smooth" { fix("切到流畅（30 帧）") } else { Value::Null }})
     } else if checks[9].bad() || checks[10].bad() {
-        json!({"level": "warn", "title": "F50 负载偏高", "detail": format!("CPU {} · 温度 {}（正常 < 70 %、< 75 °C）。注意通风，或先切到流畅。", checks[9].text, checks[10].text), "action": if quality != "smooth" { fix("切到流畅（30 帧）") } else { Value::Null }})
+        json!({"level": "warn", "title": "接收端负载偏高", "detail": format!("CPU {} · 温度 {}（正常 < 70 %、< 75 °C）。注意通风，或先切到流畅。", checks[9].text, checks[10].text), "action": if quality != "smooth" { fix("切到流畅（30 帧）") } else { Value::Null }})
     } else if checks[6].bad() || checks[7].bad() {
         json!({"level": "warn", "title": "车机画面不够流畅", "detail": format!("帧率 {} · 解码 {}。车机浏览器解码偏慢时，流畅（30 帧）更稳。", checks[6].text, checks[7].text), "action": if quality != "smooth" { fix("切到流畅（30 帧）") } else { Value::Null }})
     } else if checks[8].bad() {
         json!({"level": "warn", "title": "最近画面停住过", "detail": format!("10 分钟内停住 {stalls} 次，均已自动恢复。"), "action": if quality != "smooth" { fix("切到流畅（30 帧）") } else { Value::Null }})
+    } else if streaming && checks.iter().any(|c| c.value.is_none()) {
+        json!({"level": "unknown", "title": "已观测到画面，部分链路指标未知", "detail": "当前已上报解码画面；缺少的网络或设备指标不能判为正常。请结合原始数据与现场表现排查。", "action": null})
     } else if streaming && quality == "smooth" {
         json!({"level": "ok", "title": "当前为流畅画质", "detail": format!("当前画面上限 {cap:.0} fps，往返抖动{}。可在设置中调整画质。", jitter.map(|j| format!(" {} ms", j.round())).unwrap_or_else(|| "未知".into())), "action": {"kind": "auto", "label": "改回自动"}})
     } else if streaming {
-        json!({"level": "ok", "title": "链路稳定", "detail": "车机、F50、iPhone 三段都正常。", "action": null})
+        json!({"level": "ok", "title": "当前采样未见异常", "detail": "已测指标处于参考范围；短时采样不能替代长期与现场验收。", "action": null})
     } else if connected {
         json!({"level": "ok", "title": "已连接，等待画面更新", "detail": "当前没有持续的新画面输入，暂不据此判断帧率或卡顿。", "action": null})
     } else {
@@ -456,9 +460,9 @@ async fn ping_ms(ip: &str) -> Option<f64> {
 /// A result is meaningful only for the same phone session and authorized screen.
 pub(crate) fn connection_context(a: &Admin) -> Value {
     let (session, _) = diag().sessions();
-    json!({"session":session.as_ref().map(|s|&s.id),"viewer":a.viewer().map(|v|v.public()["id"].clone()),"phone":current_phone(a).map(|p|masked_bt(&p)),"epoch":a.hub.phones.epoch()})
+    json!({"session":session.as_ref().map(|s|&s.id),"viewer":a.viewer().map(|v|v.public()["id"].clone()),"viewer_generation":a.hub.viewer_generation(),"phone":current_phone(a).map(|p|masked_bt(&p)),"epoch":a.hub.phones.epoch()})
 }
-/// 屏幕 → F50 → iPhone → 出画面 → 解码与声音. The car passes its own measured round trip.
+/// 屏幕 → 接收端 → iPhone → 出画面 → 解码与声音. The car passes its own measured round trip.
 pub async fn segments(a: &Admin, car_rtt: Option<f64>) -> Value {
     let started = Instant::now();
     let context = connection_context(a);
@@ -508,8 +512,8 @@ fn segment_observations(s: &Value, car_ms: Option<f64>, phone_ms: Option<f64>, p
     let painted = car["decoded"].as_u64().is_some_and(|n| n > 0) && car["width"].as_u64().is_some_and(|n| n > 0) && car["height"].as_u64().is_some_and(|n| n > 0);
     let audio = car["audio_rate"].as_u64().filter(|n| *n > 0);
     vec![
-        step("屏幕 → F50", if car_ms.is_some(){"ok"}else{"skipped"}, car_ms.map(|v|format!("{v:.1} ms（当前浏览器上报）")).unwrap_or("当前屏幕没有新鲜上报；请保持投屏页在前台".into())),
-        step("F50 → iPhone", if phone_ms.is_some(){"ok"}else{"skipped"}, phone_ms.map(|v|format!("{v:.1} ms（{}）",if protocol_rtt{"AirPlay 协议探测"}else{"ICMP 探测"})).unwrap_or(if s["phone"]["ip"].is_string(){"无协议 RTT，ICMP 无响应；不能据此判定 CarPlay 失败".into()}else{"当前没有可探测的 iPhone 地址".into()})),
+        step("屏幕 → 接收端", if car_ms.is_some(){"ok"}else{"skipped"}, car_ms.map(|v|format!("{v:.1} ms（当前浏览器上报）")).unwrap_or("当前屏幕没有新鲜上报；请保持投屏页在前台".into())),
+        step("接收端 → iPhone", if phone_ms.is_some(){"ok"}else{"skipped"}, phone_ms.map(|v|format!("{v:.1} ms（{}）",if protocol_rtt{"AirPlay 协议探测"}else{"ICMP 探测"})).unwrap_or(if s["phone"]["ip"].is_string(){"无协议 RTT，ICMP 无响应；不能据此判定 CarPlay 失败".into()}else{"当前没有可探测的 iPhone 地址".into()})),
         step("iPhone 新视频帧", if frame_ms.is_some(){"ok"}else{"skipped"},frame_ms.map(|v|format!("{v:.0} ms（请求后收到新帧）")).unwrap_or(if video_active{"3 秒内无新帧；静止源可能不送帧，本项不能判定失败".into()}else{"当前无视频流，未请求关键帧".into()})),
         step("浏览器实际绘制",if painted{"ok"}else{"skipped"},if painted{format!("{}×{} · 已绘制 {} 帧；当前 {}，解码 {}（静止源可无新值）",car["width"],car["height"],car["decoded"],fmt(car["fps"].as_f64(),1,"fps"),fmt(car["decode_ms"].as_f64(),1,"ms"))}else{"当前查看通道尚无有效绘制尺寸和帧数".into()}),
         step("浏览器音频格式",if audio.is_some(){"ok"}else{"skipped"},audio.map(|rate|format!("{rate} Hz · {} 声道 · {}；已收到格式声明，不代表收到音频包；实际声音输出需现场确认",car["audio_channels"],car["audio_codec"].as_str().unwrap_or("格式未上报"))).unwrap_or("浏览器未上报音频格式；实际声音输出需现场确认".into())),
@@ -552,7 +556,9 @@ pub fn network(a: &Admin) -> Value {
         "origin": a.origin,
         "host": host,
         "lan_ip": lan,
-        "platform": if a.openwrt { "f50" } else { "linux" },
+        "platform": if a.manager.private_runtime() { "f50" } else if a.openwrt { "openwrt" } else { "linux" },
+        "receiver_name": a.manager.advertised_name(),
+        "device_name": crate::receiver_name::local_device_name(),
         "luci": if a.openwrt { lan.as_ref().map(|ip| format!("http://{ip}/cgi-bin/luci/admin/services/cowplay")) } else { Some(format!("{}/admin", a.origin)) },
         "cert_days": cert.map(|c| c.0),
         "cert_source": policy.cert_source,
@@ -980,8 +986,17 @@ mod tests {
         assert_eq!(stations.len(),1);
         assert!(stations[0].1["signal"].is_null()&&stations[0].1["rate_mbps"].is_null());
         assert_eq!(station_status(&stations,Some("00:11:22:33:44:55"),true,true),"driver_unavailable");
+        assert_eq!(station_status(&stations,None,true,true),"unidentified");
+        assert_eq!(station_status(&stations,Some("00:11:22:33:44:66"),true,true),"station_missing");
         assert_eq!(station_status(&[],None,true,true),"query_failed");
         assert_eq!(station_status(&[],None,false,false),"disconnected");
+    }
+    #[test]
+    fn wifi_sampling_cannot_fall_back_to_an_unrelated_access_point() {
+        let ifaces=vec![("wlan0".into(),"other-ap".into()),("wlan1".into(),"CarPlay-test".into())];
+        assert_eq!(wifi_interface(&ifaces,"wlan0",Some("CarPlay-test")),Some("wlan1".into()));
+        assert_eq!(wifi_interface(&ifaces,"wlan0",Some("missing-ap")),None);
+        assert_eq!(wifi_interface(&ifaces,"",None),None);
     }
     #[test]
     fn old_phone_metrics_do_not_cross_peer_changes_or_expiry() {
@@ -1147,6 +1162,13 @@ mod tests {
         }
     }
     #[test]
+    fn missing_metrics_do_not_become_an_all_links_healthy_verdict() {
+        let d = diagnosis_samples(&frame_sample(60.0,60.0), "auto", &f50_server::diag::Link::default(), true);
+        assert_eq!(d["verdict"]["level"],"unknown");
+        assert_eq!(d["checks"][3]["known"],false);
+        assert!(d["checks"][3]["ok"].is_null());
+    }
+    #[test]
     fn hidden_or_stale_browser_samples_do_not_prove_a_frame_rate_fault() {
         let link = f50_server::diag::Link::default();
         let mut s = frame_sample(60.0,0.0);
@@ -1161,7 +1183,7 @@ mod tests {
         s["car"]["jitter_ms"] = json!(24);
         let d = diagnosis_samples(&s,"auto",&f50_server::diag::Link::default(),true);
         assert_eq!(d["checks"][1]["ok"], false, "keep the existing jitter threshold");
-        assert_eq!(d["verdict"]["title"], "车机到 F50 的往返响应波动较大");
+        assert_eq!(d["verdict"]["title"], "车机到接收端的往返响应波动较大");
         assert!(!d["verdict"]["detail"].as_str().unwrap().contains("金属"));
         assert_eq!(d["verdict"]["action"], Value::Null);
     }

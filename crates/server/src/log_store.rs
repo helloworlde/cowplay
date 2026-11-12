@@ -7,8 +7,8 @@ use std::{
     path::PathBuf,
 };
 
-const FILE_LIMIT: u64 = 32 * 1024 * 1024;
-const ARCHIVE_LIMIT: u64 = 128 * 1024 * 1024;
+pub(crate) const FILE_LIMIT: u64 = 32 * 1024 * 1024;
+pub(crate) const ARCHIVE_LIMIT: u64 = 128 * 1024 * 1024;
 
 /// Strictly recognize only archives produced by this writer.
 pub fn archive_key(base: &str, name: &str) -> Option<(u64, u16)> {

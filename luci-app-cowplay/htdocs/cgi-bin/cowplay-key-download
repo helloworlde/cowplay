@@ -1,0 +1,39 @@
+#!/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+deny() {
+    printf 'Status: %s\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n%s\n' "$1" "$2"
+    exit 0
+}
+[ "$REQUEST_METHOD" = POST ] || deny '405 Method Not Allowed' '仅支持 POST'
+case "$HTTPS" in on|1) scheme=https;; *) scheme=http;; esac
+host=$HTTP_HOST
+case "$host" in ''|*[!a-zA-Z0-9.:[\]-]*) deny '403 Forbidden' '访问地址无效';; esac
+if [ "$scheme" = https ]; then host=${host%:443}; else host=${host%:80}; fi
+[ "$HTTP_ORIGIN" = "$scheme://$host" ] || deny '403 Forbidden' '来源校验失败'
+case "$CONTENT_TYPE" in application/x-www-form-urlencoded|application/x-www-form-urlencoded\;*) ;; *) deny '415 Unsupported Media Type' '请求格式无效';; esac
+case "$CONTENT_LENGTH" in ''|*[!0-9]*) deny '400 Bad Request' '请求长度无效';; esac
+[ "$CONTENT_LENGTH" -gt 0 ] && [ "$CONTENT_LENGTH" -le 64 ] || deny '400 Bad Request' '请求长度无效'
+body=$(dd bs=1 count="$CONTENT_LENGTH" 2>/dev/null)
+[ "${#body}" = "$CONTENT_LENGTH" ] || deny '400 Bad Request' '请求长度不匹配'
+case "$body" in
+    kind=tls\&sessionid=*) kind=tls; name=cowplay-tls-private.pem;;
+    kind=carplay\&sessionid=*) kind=carplay; name=cowplay-carplay-private.pk8;;
+    *) deny '400 Bad Request' '下载请求无效';;
+esac
+# The authenticated LuCI page posts its session because its cookie Path excludes this CGI.
+# Never accept credentials in the URL or infer them from an unrelated cookie.
+sid=${body#*\&sessionid=}
+case "$sid" in ''|*[!a-fA-F0-9]*) deny '403 Forbidden' '请先登录 LuCI';; esac
+[ "${#sid}" = 32 ] || deny '403 Forbidden' '会话无效'
+access=$(ubus call session access "{\"ubus_rpc_session\":\"$sid\",\"scope\":\"ubus\",\"object\":\"cowplay\",\"function\":\"private_key_export\"}" 2>/dev/null | jsonfilter -e '@.access')
+[ "$access" = true ] || deny '403 Forbidden' '需要 CowPlay 管理员写权限'
+result=$(printf '{"kind":"%s"}' "$kind" | /usr/bin/cowplay ctl key_export 2>/dev/null) || deny '409 Conflict' '当前私钥不可导出，请核对运行证书与私钥文件'
+data=$(printf '%s' "$result" | jsonfilter -e '@.data')
+unset result sid body HTTP_COOKIE
+case "$data" in ''|*[!a-zA-Z0-9+/=]*) deny '409 Conflict' '当前私钥不可导出';; esac
+command -v openssl >/dev/null 2>&1 || deny '503 Service Unavailable' '缺少 OpenSSL 解码工具'
+printf 'Content-Type: application/octet-stream\r\nContent-Disposition: attachment; filename="%s"\r\nCache-Control: no-store\r\nPragma: no-cache\r\nX-Content-Type-Options: nosniff\r\n\r\n' "$name"
+printf '%s' "$data" | openssl base64 -d -A
+unset data

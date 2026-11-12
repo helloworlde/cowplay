@@ -2,13 +2,13 @@
 
 Rust 无线 CarPlay 接收端，主要面向安装 MU300 OpenWrt 的中兴 F50，同时提供 Linux x86_64、Linux ARM64／64 位树莓派支持。TypeScript/Vite 网页嵌入静态 Rust 程序。Based on LIVI by Lasse Heitgres (https://github.com/f-io/LIVI).
 
-实现包含 BlueZ Agent1/Profile1、有界手机配对与切换、RFCOMM/iAP2、认证与 Wi-Fi 交接、RTSP/媒体、HTTPS/WSS，以及手机、车机、LuCI 管理页。Tesla BLE 提供可选的只读电量、续航和胎压 Feed，没有车辆控制命令。Ultra、音频、实际手机／车机兼容及长期稳定性仍需实机验收。
+实现包含 BlueZ Agent1/Profile1、有界手机配对与切换、RFCOMM/iAP2、认证与 Wi-Fi 交接、RTSP/媒体、HTTPS/WSS，以及手机、车机、LuCI 管理页。Tesla BLE 提供电量、续航、胎压和空调读数；车辆命令需车主单独授权，未连接时不会发送。Ultra、音频、实际手机／车机兼容及长期稳定性仍需实机验收。
 
 项目不提供配件身份、私钥、证书、手机配对或厂商固件。使用者须合法持有配件身份，自行配置可信 HTTPS 证书、蓝牙适配器与无线热点。F50 USB 不具备主机能力，不支持有线 CarPlay。
 
 ## 下载与安装
 
-正式附件发布在 [GitHub Releases](https://github.com/helloworlde/cowplay/releases)。目前尚无正式 Release，签名下载安装流程需正式附件发布后使用。
+正式附件发布在 [GitHub Releases](https://github.com/helloworlde/cowplay/releases)。首个正式版本为 `v0.0.1`。F50 在仓库公开且可访问 GitHub 后自行下载；首次覆盖安装见 [LuCI 安装步骤](docs/INSTALL-OPENWRT.md)。
 
 | 系统 | 安装材料 | 说明 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Rust 无线 CarPlay 接收端，主要面向安装 MU300 OpenWrt 的中兴 F50�
 | Linux x86_64 | cowplay-版本-linux-x86_64.tar.gz | [签名下载、安装和升级](docs/LINUX.md) |
 | Linux ARM64／64 位树莓派 | cowplay-版本-linux-arm64.tar.gz | [签名下载、安装和升级](docs/LINUX.md) |
 
-当前候选包版本为 `0.3.14-r17`。OpenWrt 发布策略仅声明 `25.12.6`、`aarch64_generic`，其他固件必须单独验证。F50 使用厂商 5.4 内核，不能安装官方 6.12 内核模块。OpenWrt 包自带私有 BlueZ/D-Bus 和 musl 用户态依赖，不替换系统驱动、固件或蓝牙服务。
+当前安装包版本为 `0.0.1-r0`。OpenWrt 发布策略仅声明 `25.12.6`、`aarch64_generic`，其他固件必须单独验证。F50 使用厂商 5.4 内核，不能安装官方 6.12 内核模块。OpenWrt 包自带私有 BlueZ/D-Bus 和 musl 用户态依赖，不替换系统驱动、固件或蓝牙服务。
 
 首次安装 OpenWrt 核心包开启下次开机自启，但不立即启动；配置完整后由管理员显式启动。Linux 安装器首次只安装程序和可选 systemd unit，不启用、不启动。升级保留配置、私有状态和原运行／自启选择。签名、公钥指纹核验和兼容性检查不可省略。
 
@@ -25,14 +25,14 @@ Rust 无线 CarPlay 接收端，主要面向安装 MU300 OpenWrt 的中兴 F50�
 - F50 配置结构见 `packaging/config.example.json`；Linux 见 `packaging/config.linux.example.json`。示例地址、域名、VIN、身份和密码均为占位值。
 - Linux 必须显式设置 `bluetooth.kind=system`，并提供支持 BR/EDR、RFCOMM 的专用适配器及系统 BlueZ/D-Bus。详见 [Linux 兼容配置](docs/LINUX.md)。
 - 私有配置、身份、证书和配对保存在设备本地。私有目录使用 `0700`，私钥与配置使用 `0600`；不要上传至本仓库、Issues、Actions artifacts 或 Release。
-- 默认投屏访问令牌为 `123456`，部署时按需要修改。Linux 可另设随机管理令牌，与投屏令牌分离。
+- 导入时生成随机六位投屏授权码；已有授权码在覆盖安装时保留。若旧开发版仍使用默认码，请在 LuCI 的“设备与访问”中更新授权码；已授权屏幕和手机配对保留。Linux 管理使用独立随机令牌。
 - F50 的 `/admin` 转至 LuCI；Linux 独立管理页需要单独管理令牌。车机页面为 `/`，手机配对页为 `/pairing`。地址需与可信证书及 Origin 配置匹配。
 
 新手机先在 `/pairing` 打开配对窗口，在 iPhone 蓝牙设置选择 CowPlay，核对两端六码并确认，然后连接 CarPlay。已保存手机可选择连接或切换，一次连接一部手机。取消或断开不删除既有配对。
 
-F50 停服使用 `/etc/init.d/cowplay stop`；`apk del cowplay` 保留私有状态。升级失败后检查事务记录和备份，不直接覆盖旧程序或私有状态进行降级。OpenWrt 保留设置的系统升级可使用签名恢复缓存；`sysupgrade -n` 和任意厂商刷机不保证保留应用，详见发布说明。
+F50 停服使用 `/etc/init.d/cowplay stop`；`apk del cowplay` 保留私有状态。升级失败后检查事务记录和备份，不直接覆盖旧程序或私有状态进行降级。本版不自动启用系统升级恢复服务；`sysupgrade -n` 和任意厂商刷机不保证保留应用，详见发布说明。
 
-Tesla 只读接入使用独立 `tesla-ble.json` 与用户本地生成的身份，没有配置时不扫描、不连接车辆。车主需在车内确认 Vehicle Monitor 授权，密钥和 VIN 留在本地。协议来源见 `research/tesla-ble-lock.json`、`NOTICE.md`。
+Tesla 入口：车机“设置 → Tesla 车辆”；LuCI“服务 → CowPlay”页内的“Tesla 车辆”。直接路径为 `/cgi-bin/luci/admin/services/cowplay/tesla`。Linux 主机使用 `/manage#tesla-management`。没有配置时不扫描、不连接车辆。只读监控与车辆控制分别使用本地密钥和车内授权，密钥与 VIN 留在设备。协议来源见 `research/tesla-ble-lock.json`、`NOTICE.md`。
 
 ## 构建与验证
 

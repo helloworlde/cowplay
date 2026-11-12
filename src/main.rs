@@ -14,15 +14,17 @@ async fn main() -> cowplay::RuntimeResult<()> {
     });
     let args: Vec<_> = std::env::args().collect();
     match args.get(1).map(String::as_str){
-        Some("probe")=>{probe()?;},
+        Some("probe")=>{probe(args.get(2).map(String::as_str))?;},
+        #[cfg(feature = "tesla")]
         Some("tesla-keygen")=>{
             let path=Path::new(args.get(2).ok_or("usage: tesla-keygen NEW_PRIVATE_KEY_FILE")?);
             let public=cowplay::tesla_ble::worker::keygen(path)?;
-            println!("{}",serde_json::json!({"public_key":public.iter().map(|b|format!("{b:02x}")).collect::<String>(),"note":"F50公钥，必须由车主现场授权；私钥留在设备私有目录"}));
+            println!("{}",serde_json::json!({"public_key":public.iter().map(|b|format!("{b:02x}")).collect::<String>(),"note":"接收端公钥，必须由车主现场授权；私钥留在设备私有目录"}));
         },
+        #[cfg(feature = "tesla")]
         Some("tesla-pair")=>{
             let config_path=args.get(2).ok_or("usage: tesla-pair TESLA_CONFIG.json [SERVICE_CONFIG.json]")?;
-            let config:cowplay::tesla_ble::worker::Config=serde_json::from_slice(&f50_server::settings::read(config_path,4096)?)?;
+            let config = cowplay::tesla_ble::management::load_monitor_config(Path::new(config_path))?;
             if let Some(service) = args.get(3) {
                 let service: cowplay::service::Config = serde_json::from_slice(&f50_server::settings::read(service,32768)?)?;
                 cowplay::tesla_ble::worker::enroll_on(config,signals,service.bluetooth.bus(),service.bluetooth.adapter()).await?;
@@ -59,6 +61,7 @@ async fn main() -> cowplay::RuntimeResult<()> {
             match result {Ok(value)=>println!("{value}"),Err(error)=>{println!("{}",serde_json::json!({"error":error}));std::process::exit(1)}}
         },
         Some("network-worker")=>{cowplay::network::worker(args.get(2).ok_or("network worker id required")?,args.get(3).is_some_and(|s|s=="recover")).await?;},
+        Some("update-bootstrap")=>{cowplay::updater::bootstrap()?; println!("发布来源与公钥已就绪");},
         Some("update")=>{
             use std::io::Read;
             let mut bytes=Vec::new();std::io::stdin().take(4097).read_to_end(&mut bytes)?;
@@ -88,7 +91,16 @@ async fn main() -> cowplay::RuntimeResult<()> {
     }
     Ok(())
 }
-fn probe() -> cowplay::RuntimeResult<()> {
+fn probe(config_path: Option<&str>) -> cowplay::RuntimeResult<()> {
+    let f50 = if let Some(path) = config_path {
+        let config: cowplay::service::Config = serde_json::from_slice(&f50_server::settings::read(path, 32768)?)?;
+        let adapter = config.bluetooth.adapter();
+        println!("bluetooth_backend={}", if config.bluetooth.is_f50() { "f50" } else { "system" });
+        println!("adapter=hci{adapter}");
+        println!("adapter_present={}", Path::new(&format!("/sys/class/bluetooth/hci{adapter}")).exists());
+        println!("host_management={}", if config.host().is_openwrt() { "openwrt" } else { "linux" });
+        config.bluetooth.is_f50()
+    } else { true };
     let openwrt = Path::new("/etc/openwrt_release").is_file();
     println!("openwrt={openwrt}");
     println!("os={} arch={}", std::env::consts::OS, std::env::consts::ARCH);
@@ -112,6 +124,7 @@ fn probe() -> cowplay::RuntimeResult<()> {
         ("hci0", "/sys/class/bluetooth/hci0"),
         ("private_bluez", "/usr/lib/cowplay/bluez/usr/bin/bluetoothd"),
     ] {
+        if !f50 && matches!(label, "mu300_bt_init" | "bluetooth_tty" | "hci0" | "private_bluez") { continue; }
         println!("{label}={}", Path::new(path).exists());
     }
     println!("carplay_session=not_verified");

@@ -112,9 +112,11 @@ pub struct Status {
 }
 pub struct Manager {
     pub connection: Connection,
+    private_runtime: bool,
     adapter_index: u16,
     adapter_path: String,
     controller: controller_name::Controller,
+    advertised_name: String,
     owner: String,
     state: Mutex<State>,
     gate: tokio::sync::Mutex<()>,
@@ -138,6 +140,7 @@ type Properties = HashMap<String, OwnedValue>;
 type Interfaces = HashMap<String, Properties>;
 
 impl Manager {
+    pub(crate) fn private_runtime(&self) -> bool { self.private_runtime }
     pub async fn register(
         bus: &str,
         phone_file: &Path,
@@ -145,6 +148,10 @@ impl Manager {
         Self::register_on(bus, phone_file, 0, true).await
     }
     pub async fn register_on(bus: &str, phone_file: &Path, adapter_index: u16, default_agent: bool) -> crate::RuntimeResult<(Arc<Self>, mpsc::Receiver<Channel>)> {
+        Self::register_named_on(bus,phone_file,adapter_index,default_agent,BLUETOOTH_NAME).await
+    }
+    pub async fn register_named_on(bus: &str, phone_file: &Path, adapter_index: u16, default_agent: bool, name: &str) -> crate::RuntimeResult<(Arc<Self>, mpsc::Receiver<Channel>)> {
+        if name.is_empty() || name.len()>63 || name.chars().any(char::is_control) { return Err("接收端名称无效".into()); }
         let adapter_path = format!("/org/bluez/hci{adapter_index}");
         let connection = zbus::connection::Builder::address(bus)?
             .method_timeout(Duration::from_secs(5))
@@ -181,7 +188,9 @@ impl Manager {
         let (channels, rx) = mpsc::channel(1);
         let manager = Arc::new(Self {
             connection: connection.clone(),
+            private_runtime: bus == crate::platform::f50::BUS,
             controller: controller_name::Controller::new(adapter_index),
+            advertised_name: name.to_owned(),
             adapter_index,
             adapter_path,
             owner,
@@ -220,12 +229,17 @@ impl Manager {
                 ("RequireAuthentication", Value::from(true)),
                 ("AutoConnect", Value::from(false)),
             ]);
-            profiles
+            if let Err(error) = profiles
                 .call::<_, _, ()>(
                     "RegisterProfile",
                     &(ObjectPath::try_from(PROFILE)?, UUID, options),
                 )
-                .await?;
+                .await {
+                if matches!(&error, zbus::Error::MethodError(_, detail, _) if detail.as_deref().is_some_and(|detail| detail.contains("UUID already registered"))) {
+                    return Err("同一 BlueZ 服务已有接收程序注册 iAP2；更换蓝牙适配器不能解决，请在主机协调接收服务后重启 CowPlay".into());
+                }
+                return Err(error.into());
+            }
             manager.set("Powered", true).await?;
             manager.set_name().await?;
             manager.set_visible(false).await?;
@@ -264,6 +278,7 @@ impl Manager {
         }
     }
     pub fn adapter_index(&self) -> u16 { self.adapter_index }
+    pub fn advertised_name(&self) -> &str { &self.advertised_name }
     async fn adapter(&self) -> zbus::Result<Proxy<'_>> {
         self.proxy(&self.adapter_path, "org.bluez.Adapter1").await
     }
@@ -278,12 +293,12 @@ impl Manager {
         let adapter = self.adapter().await?;
         let actual: String = adapter.get_property("Alias").await?;
         // BlueZ 5.83 ignores an Alias equal to its stored value even if current_alias differs.
-        if actual != BLUETOOTH_NAME { adapter.set_property("Alias", "").await?; }
-        adapter.set_property("Alias", BLUETOOTH_NAME).await?;
+        if actual != self.advertised_name { adapter.set_property("Alias", "").await?; }
+        adapter.set_property("Alias", self.advertised_name.as_str()).await?;
         let name = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 let name: String = adapter.get_property("Alias").await?;
-                if name == BLUETOOTH_NAME { return Ok::<_,zbus::Error>(name); }
+                if name == self.advertised_name { return Ok::<_,zbus::Error>(name); }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         }).await.map_err(|_| "蓝牙名称未生效，请展开调试信息核对适配器名称")??;
@@ -1397,7 +1412,9 @@ pub(crate) mod recovery_tests {
         let (channels, _rx) = mpsc::channel(1);
         let manager = Arc::new(Manager {
             connection,
+            private_runtime: false,
             controller: controller_name::Controller::mocked(),
+            advertised_name: BLUETOOTH_NAME.into(),
             adapter_index,
             adapter_path,
             owner: OWNER.into(),
@@ -1424,6 +1441,21 @@ pub(crate) mod recovery_tests {
         assert_eq!(actual.eir_name.as_deref(),Some(BLUETOOTH_NAME));
         assert!(adapter.get().await.discoverable);
         manager.stop().await;
+    }
+    #[tokio::test]
+    async fn device_name_is_shared_by_alias_controller_and_eir_after_reopening() {
+        let (mut manager, _server, _remote) = fixture().await;
+        let expected = "cowplay-rasp";
+        Arc::get_mut(&mut manager).unwrap().advertised_name = expected.into();
+        for _ in 0..2 {
+            manager.open().await.unwrap();
+            let info=manager.adapter_info().await.unwrap();
+            assert_eq!(manager.advertised_name(),expected);
+            assert_eq!(info.alias,expected);
+            assert_eq!(info.controller_name,expected);
+            assert_eq!(info.eir_name.as_deref(),Some(expected));
+            manager.cancel().await.unwrap();
+        }
     }
     #[tokio::test]
     async fn failed_hardware_name_or_eir_keeps_pairing_and_discovery_closed() {

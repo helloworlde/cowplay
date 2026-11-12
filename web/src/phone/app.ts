@@ -2,7 +2,7 @@ import type {Diagnosis, Phone, ScreenPrefs, Segments, State, Stats} from '../sha
 export type Page = 'status' | 'iphones' | 'diag' | 'log' | 'settings';
 export const app = {
   state: null as State | null, stats: null as Stats | null, diag: null as Diagnosis | null,
-  system: null as {openwrt?: string; kernel?: string; arch?: string; bluez?: string} | null,
+  system: null as {os?: string; openwrt?: string; kernel?: string; arch?: string; bluez?: string} | null,
   warnings: null as number | null,
   page: 'status' as Page, edit: false, sheet: null as 'add' | 'delete' | 'prefs' | null,
   remove: null as Phone | null, pref: 'quality' as 'quality' | 'call' | 'rail_side',

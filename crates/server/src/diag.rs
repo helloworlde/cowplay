@@ -32,6 +32,7 @@ impl Level {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Entry {
+    pub service: String,
     pub seq: u64,
     pub ts_ms: u64,
     pub level: Level,
@@ -65,6 +66,18 @@ pub struct Session {
     pub model: Option<String>,
     pub os: Option<String>,
     pub events: Vec<Event>,
+    pub transport_failure: Option<TransportFailure>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TransportFailure {
+    pub ts_ms: u64,
+    pub stage: &'static str,
+    pub kind: &'static str,
+    pub expected_bytes: usize,
+    pub read_budget_ms: u64,
+    pub configured: bool,
+    pub received_frame: bool,
 }
 
 /// Where the phone connection currently stands, step by step, for the car/phone/admin pages.
@@ -134,6 +147,9 @@ pub struct ViewerReport {
     pub audio_rate: Option<u32>,
     pub audio_channels: Option<u8>,
     pub audio_codec: Option<String>,
+    /// Browser playback underruns and late packets dropped since the page loaded.
+    pub audio_underruns: Option<u64>,
+    pub audio_drops: Option<u64>,
     pub codec: Option<String>,
     pub color: Option<String>,
     pub visible: Option<bool>,
@@ -141,6 +157,7 @@ pub struct ViewerReport {
 
 const LOG_CAP_BYTES: usize = 4 * 1024 * 1024;
 const MSG_LIMIT: usize = 1024;
+const SINK_QUEUE_LINES: usize = 4096;
 const HISTORY: usize = 60;
 const SESSION_EVENTS: usize = 200;
 const SESSION_HISTORY: usize = 5;
@@ -364,6 +381,7 @@ fn record_for(d: &Diag, level: Level, module: &'static str, msg: String, echo: b
         let mut logs = d.logs.lock().unwrap();
         logs.seq += 1;
         let entry = Entry {
+            service: d.service_id.clone(),
             seq: logs.seq,
             ts_ms,
             level,
@@ -397,10 +415,13 @@ fn record_for(d: &Diag, level: Level, module: &'static str, msg: String, echo: b
 
 pub fn format_line(e: &Entry) -> String {
     format!(
-        "{} {:<5} {:<7} {}\n",
+        "{} {:<5} {:<7} [ts_ms={} service={} seq={}] {}\n",
         clock_text(e.ts_ms, true),
         e.level.as_str(),
         e.module,
+        e.ts_ms,
+        e.service,
+        e.seq,
         e.msg
     )
 }
@@ -556,7 +577,7 @@ impl Diag {
                 };
                 file.keep_days.store(keep_days, Ordering::Relaxed);
                 drop(files);
-                let (tx, rx) = std::sync::mpsc::sync_channel(4096);
+                let (tx, rx) = std::sync::mpsc::sync_channel(SINK_QUEUE_LINES);
                 let thread_file = file.clone();
                 let (done, drained) = tokio::sync::oneshot::channel();
                 std::thread::Builder::new()
@@ -590,12 +611,15 @@ impl Diag {
     pub fn storage_status(&self) -> serde_json::Value {
         let active = self.sink_path();
         let guard = self.sink_state.lock().unwrap();
-        let Some(s) = guard.as_ref() else { return serde_json::json!({"active": false, "queued": 0, "written": 0, "queue_dropped": 0, "failures": 0}); };
-        serde_json::json!({"active": active.is_some() && s.failures.load(Ordering::Relaxed)==0, "path": active,
+        let mut value = serde_json::json!({"active":false,"queued":0,"written":0,"queue_dropped":0,"failures":0,"sync_interval_ms":1000,"file_limit_bytes":crate::log_store::FILE_LIMIT,"archive_limit_bytes":crate::log_store::ARCHIVE_LIMIT,"queue_capacity_lines":SINK_QUEUE_LINES,"message_limit_bytes":MSG_LIMIT});
+        let Some(s) = guard.as_ref() else { return value; };
+        let state=serde_json::json!({"active": active.is_some() && s.failures.load(Ordering::Relaxed)==0, "path": active,
             "queued": s.queued.load(Ordering::Relaxed), "written": s.written.load(Ordering::Relaxed),
             "queue_dropped": s.dropped.load(Ordering::Relaxed), "failures": s.failures.load(Ordering::Relaxed),
             "last_sync_ms": s.last_sync_ms.load(Ordering::Relaxed), "sync_age_ms":s.last_sync_at.lock().unwrap().map(|t|t.elapsed().as_millis() as u64), "error": *s.error.lock().unwrap(),
-            "sync_interval_ms": 1000, "file_limit_bytes": 32*1024*1024, "archive_limit_bytes": 128*1024*1024})
+            "sync_interval_ms": 1000});
+        value.as_object_mut().unwrap().extend(state.as_object().unwrap().clone());
+        value
     }
     pub fn sink_path(&self) -> Option<String> {
         self.sink
@@ -761,6 +785,7 @@ impl Diag {
                 model: None,
                 os: None,
                 events: Vec::new(),
+                transport_failure: None,
             });
             id
         };
@@ -778,6 +803,11 @@ impl Diag {
     }
     pub fn session_end(&self, reason: &str) {
         self.finish_session(reason, false);
+    }
+    pub fn transport_failure(&self, session: &str, failure: TransportFailure) {
+        if let Some(current) = self.sessions.lock().unwrap().current.as_mut().filter(|s| s.id == session) {
+            current.transport_failure = Some(failure);
+        }
     }
     fn finish_session(&self, reason: &str, only_without_control: bool) {
         let ended = {
@@ -1323,6 +1353,11 @@ mod tests {
         let d = diag();
         let id = d.session_begin("test");
         assert_eq!(d.session_begin("again"), id);
+        let failure=||TransportFailure {ts_ms:1000,stage:"header",kind:"TimedOut",expected_bytes:128,read_budget_ms:15000,configured:true,received_frame:true};
+        d.transport_failure("previous-session",failure());
+        assert!(d.sessions().0.unwrap().transport_failure.is_none());
+        d.transport_failure(&id,failure());
+        assert_eq!(d.sessions().0.unwrap().transport_failure.unwrap().expected_bytes,128);
         d.event("warn", "video", "slow");
         d.first_frame();
         d.first_frame();

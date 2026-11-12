@@ -4,6 +4,10 @@
 
 use super::*;
 
+fn get<'a>(value: &'a bplist::Value, key: &str) -> Option<&'a bplist::Value> {
+    value.as_dictionary()?.get(key)
+}
+
 fn hex(s: &str) -> Vec<u8> {
     let s: std::string::String = s.split_whitespace().collect();
     (0..s.len())
@@ -76,31 +80,31 @@ fn info_describes_route_sharing_for_one_plugin() {
     let (key, info) = VehicleState::new(false, "9.5.0", "2026-10-15 14:30").info_entry();
     assert_eq!(key, "vehicleStateProtocolInfo");
     assert_eq!(
-        info.get("protocolVersion").and_then(bplist::Value::as_str),
+        get(&info, "protocolVersion").and_then(bplist::Value::as_string),
         Some("1.0")
     );
-    let mapping = info.get("pluginMapping").and_then(|m| m.get(PLUGIN));
-    assert_eq!(mapping.and_then(bplist::Value::as_int), Some(0));
-    let plugin = &info
-        .get("pluginConfigs")
+    let mapping = get(&info, "pluginMapping").and_then(|m| get(&m, PLUGIN));
+    assert_eq!(
+        mapping.and_then(bplist::Value::as_unsigned_integer),
+        Some(0)
+    );
+    let plugin = &get(&info, "pluginConfigs")
         .and_then(bplist::Value::as_array)
         .unwrap()[0];
-    let accessory = &plugin
-        .get("accessories")
+    let accessory = &get(&plugin, "accessories")
         .and_then(bplist::Value::as_array)
         .unwrap()[0];
     assert_eq!(
-        accessory.get("type").and_then(bplist::Value::as_int),
+        get(&accessory, "type").and_then(bplist::Value::as_unsigned_integer),
         Some(0x0E00_0002)
     );
-    let services = accessory
-        .get("services")
+    let services = get(&accessory, "services")
         .and_then(bplist::Value::as_array)
         .unwrap();
     let characteristics: Vec<&bplist::Value> = services
         .iter()
         .flat_map(|s| {
-            s.get("characteristics")
+            get(&s, "characteristics")
                 .and_then(bplist::Value::as_array)
                 .unwrap()
         })
@@ -109,23 +113,24 @@ fn info_describes_route_sharing_for_one_plugin() {
     let find = |iid: u64| {
         *characteristics
             .iter()
-            .find(|c| c.get("iid").and_then(bplist::Value::as_int) == Some(iid))
+            .find(|c| get(&c, "iid").and_then(bplist::Value::as_unsigned_integer) == Some(iid))
             .unwrap()
     };
-    let flag = |c: &bplist::Value, k: &str| c.get(k).and_then(bplist::Value::as_bool);
-    let number = |c: &bplist::Value, k: &str| c.get(k).and_then(bplist::Value::as_int);
+    let flag = |c: &bplist::Value, k: &str| get(&c, k).and_then(bplist::Value::as_boolean);
+    let number =
+        |c: &bplist::Value, k: &str| get(&c, k).and_then(bplist::Value::as_unsigned_integer);
 
     let destination = find(266);
     assert_eq!(flag(destination, "writable"), Some(true));
     assert_eq!(flag(destination, "oemWritable"), Some(false));
     assert_eq!(flag(destination, "supportsInvalid"), Some(true));
     assert_eq!(number(destination, "maximumLength"), Some(65535));
-    assert!(destination.get("initialValue").is_none());
+    assert!(get(&destination, "initialValue").is_none());
 
     let sharing = find(261);
     assert_eq!(number(sharing, "maximumValue"), Some(4));
     assert_eq!(number(sharing, "stepValue"), Some(1));
-    assert!(sharing.get("supportsInvalid").is_none());
+    assert!(get(&sharing, "supportsInvalid").is_none());
     assert_eq!(number(find(259), "maximumValue"), Some(u64::from(u32::MAX)));
 
     let brand = find(275);
@@ -133,7 +138,7 @@ fn info_describes_route_sharing_for_one_plugin() {
     assert_eq!(flag(brand, "oemWritable"), Some(true));
     assert_eq!(flag(brand, "mutable"), Some(false));
     assert_eq!(
-        brand.get("initialValue").and_then(bplist::Value::as_str),
+        get(&brand, "initialValue").and_then(bplist::Value::as_string),
         Some("LIVI")
     );
 }
@@ -249,36 +254,35 @@ fn climate_and_seats_come_only_with_the_climate_controls() {
 fn the_vehicle_app_shows_the_livi_version_and_build_date() {
     let lines = |version: &str, built: &str| {
         let (_, info) = VehicleState::new(false, version, built).info_entry();
-        let plugin = &info
-            .get("pluginConfigs")
+        let plugin = &get(&info, "pluginConfigs")
             .and_then(bplist::Value::as_array)
             .unwrap()[0];
-        let settings = plugin
-            .get("accessories")
+        let settings = get(&plugin, "accessories")
             .and_then(bplist::Value::as_array)
             .unwrap()
             .iter()
-            .find(|a| a.get("type").and_then(bplist::Value::as_int) == Some(0x0500_0001))
+            .find(|a| {
+                get(&a, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x0500_0001)
+            })
             .unwrap()
             .clone();
-        settings
-            .get("services")
+        get(&settings, "services")
             .and_then(bplist::Value::as_array)
             .unwrap()
             .to_vec()
     };
     let initial = |line: &bplist::Value, kind| {
-        line.get("characteristics")
+        get(&line, "characteristics")
             .and_then(bplist::Value::as_array)
             .unwrap()
             .iter()
-            .find(|c| c.get("type").and_then(bplist::Value::as_int) == Some(kind))
-            .and_then(|c| c.get("initialValue"))
+            .find(|c| get(&c, "type").and_then(bplist::Value::as_unsigned_integer) == Some(kind))
+            .and_then(|c| get(&c, "initialValue"))
             .cloned()
     };
     let text = |s: &str| Some(bplist::Value::String(s.into()));
 
-    let kind = |l: &bplist::Value| l.get("type").and_then(bplist::Value::as_int);
+    let kind = |l: &bplist::Value| get(&l, "type").and_then(bplist::Value::as_unsigned_integer);
     let known = lines("9.5.0", "2026-10-15 14:30");
     assert_eq!(
         known.iter().map(kind).collect::<Vec<_>>(),
@@ -293,7 +297,7 @@ fn the_vehicle_app_shows_the_livi_version_and_build_date() {
             text("LIVI"),
             "both lines sit in the section"
         );
-        assert_eq!(initial(line, 0x3600_0006), Some(bplist::Value::Int(0)));
+        assert_eq!(initial(line, 0x3600_0006), Some(bplist::number(0)));
     }
     assert_eq!(initial(&known[0], 0x3000_0001), text("Version"));
     assert_eq!(initial(&known[0], 0x3000_0017), text("9.5.0"));
@@ -308,16 +312,19 @@ fn the_vehicle_app_shows_the_livi_version_and_build_date() {
     );
     assert_eq!(initial(&known[1], 0x3000_0017), text("2026-10-15 14:30"));
     let sort_order = |line: &bplist::Value| {
-        line.get("characteristics")
+        get(&line, "characteristics")
             .and_then(bplist::Value::as_array)
             .unwrap()
             .iter()
-            .find(|c| c.get("type").and_then(bplist::Value::as_int) == Some(0x3000_0003))
+            .find(|c| {
+                get(&c, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x3000_0003)
+            })
             .cloned()
             .unwrap()
     };
     let (version, build) = (sort_order(&known[0]), sort_order(&known[1]));
-    let number = |c: &bplist::Value, k: &str| c.get(k).and_then(bplist::Value::as_int);
+    let number =
+        |c: &bplist::Value, k: &str| get(&c, k).and_then(bplist::Value::as_unsigned_integer);
     assert_eq!(
         number(&version, "initialValue"),
         Some(0),
@@ -344,45 +351,46 @@ fn both_front_seats_heat_in_two_steps() {
     let (_, info) = VehicleState::new(false, "9.5.0", "2026-10-15 14:30")
         .with_climate(true)
         .info_entry();
-    let plugin = &info
-        .get("pluginConfigs")
+    let plugin = &get(&info, "pluginConfigs")
         .and_then(bplist::Value::as_array)
         .unwrap()[0];
-    let seats = plugin
-        .get("accessories")
+    let seats = get(&plugin, "accessories")
         .and_then(bplist::Value::as_array)
         .unwrap()
         .iter()
-        .find(|a| a.get("type").and_then(bplist::Value::as_int) == Some(0x0150_0001))
+        .find(|a| get(&a, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x0150_0001))
         .unwrap();
-    let services = seats
-        .get("services")
+    let services = get(&seats, "services")
         .and_then(bplist::Value::as_array)
         .unwrap();
     assert_eq!(services.len(), 2);
     for service in services {
         assert_eq!(
-            service.get("type").and_then(bplist::Value::as_int),
+            get(&service, "type").and_then(bplist::Value::as_unsigned_integer),
             Some(0x2200_0001)
         );
-        let level = service
-            .get("characteristics")
+        let level = get(&service, "characteristics")
             .and_then(bplist::Value::as_array)
             .unwrap()
             .iter()
-            .find(|c| c.get("type").and_then(bplist::Value::as_int) == Some(0x3100_0021))
+            .find(|c| {
+                get(&c, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x3100_0021)
+            })
             .unwrap();
-        assert_eq!(level.get("format").and_then(bplist::Value::as_int), Some(7));
         assert_eq!(
-            level.get("minimumValue").and_then(bplist::Value::as_int),
+            get(&level, "format").and_then(bplist::Value::as_unsigned_integer),
+            Some(7)
+        );
+        assert_eq!(
+            get(&level, "minimumValue").and_then(bplist::Value::as_unsigned_integer),
             Some(0)
         );
         assert_eq!(
-            level.get("maximumValue").and_then(bplist::Value::as_int),
+            get(&level, "maximumValue").and_then(bplist::Value::as_unsigned_integer),
             Some(2)
         );
         assert_eq!(
-            level.get("writable").and_then(bplist::Value::as_bool),
+            get(&level, "writable").and_then(bplist::Value::as_boolean),
             Some(true)
         );
     }
@@ -425,39 +433,42 @@ fn front_and_rear_windows_heat_through_their_wires() {
     let (_, info) = VehicleState::new(false, "9.5.0", "2026-10-15 14:30")
         .with_climate(true)
         .info_entry();
-    let plugin = &info
-        .get("pluginConfigs")
+    let plugin = &get(&info, "pluginConfigs")
         .and_then(bplist::Value::as_array)
         .unwrap()[0];
-    let climate = plugin
-        .get("accessories")
+    let climate = get(&plugin, "accessories")
         .and_then(bplist::Value::as_array)
         .unwrap()
         .iter()
-        .find(|a| a.get("type").and_then(bplist::Value::as_int) == Some(0x0100_0001))
+        .find(|a| get(&a, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x0100_0001))
         .unwrap();
-    let windows: Vec<(String, Option<u64>)> = climate
-        .get("services")
+    let windows: Vec<(String, Option<u64>)> = get(&climate, "services")
         .and_then(bplist::Value::as_array)
         .unwrap()
         .iter()
-        .filter(|s| s.get("type").and_then(bplist::Value::as_int) == Some(0x1100_0005))
+        .filter(|s| {
+            get(&s, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x1100_0005)
+        })
         .map(|s| {
-            let chars = s
-                .get("characteristics")
+            let chars = get(&s, "characteristics")
                 .and_then(bplist::Value::as_array)
                 .unwrap();
             let of = |kind| {
                 chars
                     .iter()
-                    .find(|c| c.get("type").and_then(bplist::Value::as_int) == Some(kind))
-                    .and_then(|c| c.get("initialValue"))
+                    .find(|c| {
+                        get(&c, "type").and_then(bplist::Value::as_unsigned_integer) == Some(kind)
+                    })
+                    .and_then(|c| get(&c, "initialValue"))
             };
             let key = of(0x3600_0065)
-                .and_then(bplist::Value::as_str)
+                .and_then(bplist::Value::as_string)
                 .unwrap()
                 .to_string();
-            (key, of(0x3100_0014).and_then(bplist::Value::as_int))
+            (
+                key,
+                of(0x3100_0014).and_then(bplist::Value::as_unsigned_integer),
+            )
         })
         .collect();
     assert_eq!(
@@ -694,30 +705,31 @@ fn both_front_seats_have_their_own_temperature() {
     let (_, info) = VehicleState::new(false, "9.5.0", "2026-10-15 14:30")
         .with_climate(true)
         .info_entry();
-    let plugin = &info
-        .get("pluginConfigs")
+    let plugin = &get(&info, "pluginConfigs")
         .and_then(bplist::Value::as_array)
         .unwrap()[0];
-    let climate = plugin
-        .get("accessories")
+    let climate = get(&plugin, "accessories")
         .and_then(bplist::Value::as_array)
         .unwrap()
         .iter()
-        .find(|a| a.get("type").and_then(bplist::Value::as_int) == Some(0x0100_0001))
+        .find(|a| get(&a, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x0100_0001))
         .unwrap();
-    let seats: Vec<String> = climate
-        .get("services")
+    let seats: Vec<String> = get(&climate, "services")
         .and_then(bplist::Value::as_array)
         .unwrap()
         .iter()
-        .filter(|s| s.get("type").and_then(bplist::Value::as_int) == Some(0x1100_0002))
+        .filter(|s| {
+            get(&s, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x1100_0002)
+        })
         .flat_map(|s| {
-            s.get("characteristics")
+            get(&s, "characteristics")
                 .and_then(bplist::Value::as_array)
                 .unwrap()
         })
-        .filter(|c| c.get("type").and_then(bplist::Value::as_int) == Some(0x3600_0065))
-        .filter_map(|c| c.get("initialValue").and_then(bplist::Value::as_str))
+        .filter(|c| {
+            get(&c, "type").and_then(bplist::Value::as_unsigned_integer) == Some(0x3600_0065)
+        })
+        .filter_map(|c| get(&c, "initialValue").and_then(bplist::Value::as_string))
         .map(str::to_string)
         .collect();
     assert_eq!(seats, ["seat_front_left", "seat_front_right"]);
@@ -727,71 +739,71 @@ fn both_front_seats_have_their_own_temperature() {
 fn climate_is_described_and_set_from_the_phone() {
     let mut state = VehicleState::new(false, "9.5.0", "2026-10-15 14:30").with_climate(true);
     let (_, info) = state.info_entry();
-    let plugin = &info
-        .get("pluginConfigs")
+    let plugin = &get(&info, "pluginConfigs")
         .and_then(bplist::Value::as_array)
         .unwrap()[0];
-    let accessories = plugin
-        .get("accessories")
+    let accessories = get(&plugin, "accessories")
         .and_then(bplist::Value::as_array)
         .unwrap();
     fn of_type(list: &[bplist::Value], kind: u64) -> &bplist::Value {
         list.iter()
-            .find(|x| x.get("type").and_then(bplist::Value::as_int) == Some(kind))
+            .find(|x| get(&x, "type").and_then(bplist::Value::as_unsigned_integer) == Some(kind))
             .unwrap()
     }
     let climate = of_type(accessories, 0x0100_0001);
-    let services = climate
-        .get("services")
+    let services = get(&climate, "services")
         .and_then(bplist::Value::as_array)
         .unwrap();
     let characteristics = |kind| {
-        of_type(services, kind)
-            .get("characteristics")
+        get(of_type(services, kind), "characteristics")
             .and_then(bplist::Value::as_array)
             .unwrap()
     };
     let target = of_type(characteristics(0x1100_0002), 0x3100_0017);
     assert_eq!(
-        target.get("format").and_then(bplist::Value::as_int),
+        get(&target, "format").and_then(bplist::Value::as_unsigned_integer),
         Some(9)
     );
     assert_eq!(
-        target.get("units").and_then(bplist::Value::as_int),
+        get(&target, "units").and_then(bplist::Value::as_unsigned_integer),
         Some(1082)
     );
     assert_eq!(
-        target.get("writable").and_then(bplist::Value::as_bool),
+        get(&target, "writable").and_then(bplist::Value::as_boolean),
         Some(true)
     );
     assert_eq!(
-        target.get("oemWritable").and_then(bplist::Value::as_bool),
+        get(&target, "oemWritable").and_then(bplist::Value::as_boolean),
         Some(true)
     );
-    assert_eq!(target.get("minimumValue"), Some(&bplist::Value::Real(16.0)));
-    assert_eq!(target.get("initialValue"), Some(&bplist::Value::Real(21.0)));
+    assert_eq!(
+        get(&target, "minimumValue"),
+        Some(&bplist::Value::Real(16.0))
+    );
+    assert_eq!(
+        get(&target, "initialValue"),
+        Some(&bplist::Value::Real(21.0))
+    );
     let level = of_type(characteristics(0x1100_0007), 0x3100_0012);
     assert_eq!(
-        level.get("maximumValue").and_then(bplist::Value::as_int),
+        get(&level, "maximumValue").and_then(bplist::Value::as_unsigned_integer),
         Some(7)
     );
     let resources = of_type(accessories, 0x0120_0002);
     let variant = of_type(
-        resources
-            .get("services")
+        get(&resources, "services")
             .and_then(bplist::Value::as_array)
             .unwrap(),
         0x2000_0001,
     );
     let style = of_type(
-        variant
-            .get("characteristics")
+        get(&variant, "characteristics")
             .and_then(bplist::Value::as_array)
             .unwrap(),
         0x4800_0004,
     );
     assert_eq!(
-        style.get("initialValue"),
+        get(&style, "initialValue"),
         Some(&bplist::Value::String("5Seater".into()))
     );
     let themed = VehicleState::new(false, "", "").with_variant("DB12Coupe");
@@ -1919,4 +1931,36 @@ fn the_radio_reaches_the_phone_as_updates() {
     );
     assert_eq!(shown(&Value::Data(vec![0; 3])), "3 B");
     assert_eq!(shown(&Value::Array(vec![Value::Null; 5])), "5 items");
+}
+
+#[test]
+fn plist_conversion_preserves_unsigned_values_and_wire_types() {
+    let value = dict([
+        ("null", Value::Null),
+        ("negative", Value::Int(-1)),
+        ("unsigned", Value::Int(i64::MAX)),
+        ("boolean", Value::Bool(true)),
+        ("real", Value::Real(-1.5)),
+        ("name", Value::str("Bülli")),
+        ("data", Value::Data(vec![0, 1, 2])),
+        ("uuid", Value::Uuid([7; 16])),
+        ("array", Value::Array(vec![Value::Int(300)])),
+    ]);
+    let expected = bplist::dict([
+        ("null", bplist::Value::Data(Vec::new())),
+        ("negative", bplist::number(0)),
+        ("unsigned", bplist::number(i64::MAX as u64)),
+        ("boolean", bplist::Value::Boolean(true)),
+        ("real", bplist::Value::Real(-1.5)),
+        ("name", bplist::Value::String("Bülli".into())),
+        ("data", bplist::Value::Data(vec![0, 1, 2])),
+        ("uuid", bplist::Value::Data(vec![7; 16])),
+        ("array", bplist::Value::Array(vec![bplist::number(300)])),
+    ]);
+    let converted = to_plist(&value);
+    assert_eq!(converted, expected);
+    assert_eq!(
+        bplist::decode(&bplist::encode(&converted).unwrap()).unwrap(),
+        expected
+    );
 }

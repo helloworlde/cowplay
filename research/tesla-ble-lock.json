@@ -3,7 +3,7 @@
   "url": "https://github.com/teslamotors/vehicle-command",
   "commit": "0a582da430c4aca6d397fb6cbed5b4d6bb380125",
   "license": "Apache-2.0",
-  "scope": "Read-only SessionInfo, AES-GCM GetState charge and TPMS, physical Vehicle Monitor enrollment; no vehicle control commands",
+  "scope": "Authenticated SessionInfo and AES-GCM GetState charge, TPMS and climate; whitelisted HVAC power and temperature commands; physical Vehicle Monitor enrollment by default with explicit Driver enrollment for control; no generic vehicle command API",
   "files": {
     "pkg/protocol/protobuf/universal_message.proto": "110ac4372e3ebdfe94191de857832302d75717fc105820b9f391dbc68e31979f",
     "pkg/protocol/protobuf/signatures.proto": "f97c4427b954b0169f043116a21211d7b80b67caa03360d7c0deb7c31abbd73d",
@@ -18,6 +18,10 @@
     "pkg/protocol/protobuf/keys.proto": "1628c14e1779cd6cf6a87dcceb79f4f7152ec5067d402fbc4990c45b78241b80",
     "pkg/vehicle/security.go": "b54ecd6f8a5297bdcb4e21dfbf6a398c13395e1fd05b46b07358cc9c1af69f05",
     "pkg/protocol/error.go": "aa1f5e5ca4d2b89dc8b6bc42c850ea14f04b7c257f08b467cc49611abb23b420",
-    "pkg/connector/ble/ble.go": "f3aaf96f9e83c50d235d722e81e92a479f01d46244d081bf172d086613b07fbc"
+    "pkg/connector/ble/ble.go": "f3aaf96f9e83c50d235d722e81e92a479f01d46244d081bf172d086613b07fbc",
+    "pkg/vehicle/climate.go": "4156ee0a798183e5ad57b8fd670d7b74153830c4ecbd84578a856e928d2a87cd",
+    "pkg/vehicle/infotainment.go": "d268dee22783de593b91597496720c24250f054a0cd761416232ba90e33967b5",
+    "pkg/protocol/protocol.md": "062389f5db233620251e14a10dc6db037d9a94da6245713bad0fc826281c21c0",
+    "pkg/vehicle/vcsec.go": "dfa2d562880d057762eb7fd5ed77f9a03eee03f293f9d617832e1924c16725c7"
   }
 }

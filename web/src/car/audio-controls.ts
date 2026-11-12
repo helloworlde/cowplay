@@ -23,9 +23,9 @@ export class AudioControls {
   const streams=this.engine.activeStreamNames();
   return h('section',{class:'audio-mixer','aria-label':'浏览器音量'},
    slider('master','总音量',this.levels.master,n=>{this.levels.master=n;this.levels.muted=false;}),
-   h('button',{type:'button',class:'audio-mute','aria-pressed':String(this.levels.muted),onclick:()=>{this.levels.muted=!this.levels.muted;this.save();this.render();}},this.levels.muted?'取消静音':'静音'),
+   h('button',{type:'button',class:'audio-mute','aria-pressed':String(this.levels.muted),onclick:(e:Event)=>{this.levels.muted=!this.levels.muted;this.save();const button=e.currentTarget as HTMLButtonElement;button.setAttribute('aria-pressed',String(this.levels.muted));button.textContent=this.levels.muted?'取消静音':'静音';this.render();}},this.levels.muted?'取消静音':'静音'),
    ...streams.map(name=>slider(name,labels[name]??name,this.levels.streams[name]??1,n=>{this.levels.streams[name]=n;})),
-   h('p',{class:'audio-status',role:'status'},streams.length?(this.engine.isUnlocked?'浏览器已允许播放；实际扬声器输出需现场确认。':'点一下页面以允许浏览器播放声音。'):'尚未收到音频流；开始音乐、导航或通话后显示对应音量。'),
-   h('p',{class:'audio-status'},`麦克风：${mic}`),h('p',{class:'audio-status'},'音量保存在此浏览器，不触发 iPhone 重连。'));
+   h('p',{class:`audio-status${streams.length?'':' audio-empty'}`,role:'status'},streams.length?(this.engine.isUnlocked?'浏览器已允许播放；实际扬声器输出需现场确认。':'点一下页面以允许浏览器播放声音。'):'尚未收到音频流。开始音乐、导航或通话后，可在这里分别调节音量。'),
+   h('details',{class:'audio-notes'},h('summary',{},'声音与麦克风说明'),h('p',{class:'audio-status'},`麦克风：${mic}`),h('p',{class:'audio-status'},'音量保存在此浏览器，不触发 iPhone 重连。')));
  }
 }

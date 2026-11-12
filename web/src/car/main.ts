@@ -61,7 +61,7 @@ let socket: WebSocket | null = null, inputReady = false, retry = 0, retryTimer =
 const ping = {sent: new Map<number, number>(), seq: 0, rtt: [] as number[], lost: [] as boolean[], latest: null as {seq: number; rtt_ms: number; at: number} | null};
 let bytesIn = 0;
 const send = (value: unknown): boolean => { if (app.channel && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 4096) { socket.send(JSON.stringify(value)); return true; } return false; };
-const audio = new AudioEngine(() => toast('声音暂不可用：点一下屏幕允许播放声音'), (kind, timestamp_us) => send({type: 'audioprogress', kind, timestamp_us}));
+const audio = new AudioEngine(message => toast(`声音异常：${message.slice(0, 120)}`), (kind, timestamp_us) => send({type: 'audioprogress', kind, timestamp_us}));
 const mixer=new AudioControls(audio,render);
 let micStatus='等待 iPhone 请求语音输入';
 const input = new InputController(canvas,message=>{
@@ -106,7 +106,7 @@ function closeSocket(): void {
 }
 function windowInfo() { const r = region(k); return {w: r.w, h: r.h, dpr: devicePixelRatio, rw: r.rw, rh: r.rh}; }
 function connectSocket(takeover = false): void {
-  if (!app.authorized || app.stopped || !navigator.onLine) return;
+  if (!app.authorized || app.stopped || !navigator.onLine || app.buildMismatch) return;
   app.channelError = null;
   closeSocket();
   const next = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
@@ -132,10 +132,26 @@ function onText(next: WebSocket, text: string): void {
   try { m = JSON.parse(text); } catch { failed(next); return; }
   if (m.type === 'error') {
     clearTimeout(deadline);
-    if (m.code === 'AUTH_REVOKED') { invalidate('这块屏幕的授权已失效'); closeSocket(); app.authorized = false; authorizationChanged(); app.everRendered = false; setView('connect'); void boot(); return; }
+    if (m.code === 'AUTH_REVOKED') {
+      invalidate('正在重新核实连接授权');
+      closeSocket();
+      const owner = authorization;
+      void verifyAuthorization(owner).then(() => {
+        // Network failure is not revocation. Retain the existing bounded recovery;
+        // a confirmed revocation changes authorization and cancels it below.
+        if (owner === authorization && app.authorized) schedule();
+      });
+      return;
+    }
     if (m.code === 'VIEWER_BUSY') { closeSocket(); app.takeover = {deadline: null}; render(); return; }
     if (m.code === 'VIEWER_REPLACED') { invalidate('画面已切到另一块屏幕'); closeSocket(); app.takeover = {deadline: null}; setView('connect'); return; }
-    if (m.code === 'CLIENT_BUILD_MISMATCH') { closeSocket(); location.reload(); return; }
+    if (m.code === 'CLIENT_BUILD_MISMATCH') {
+      closeSocket();
+      // A stale bundle must never create a reload → keypad → reload loop.
+      app.channelError = '页面版本已更新，请刷新页面';
+      app.buildMismatch = true;
+      invalidate(app.channelError); setView('connect'); render(); return;
+    }
     failed(next); return;
   }
   if (m.type === 'hello') {
@@ -148,7 +164,7 @@ function onText(next: WebSocket, text: string): void {
     case 'pong': onPong(m.seq); return;
     case 'reload': location.reload(); return;
     case 'host-ui': location.hash = 'settings/pic'; return;
-    case 'mic': if (m.state === 'start' && typeof m.rate === 'number') void mic.start(m.rate); else mic.stop(); return;
+    case 'mic': if (m.state === 'start') void mic.start(m); else mic.stop(); return;
     case 'session-reset': invalidate('iPhone 会话已结束，正在等待重新连接'); app.connectingSince = Date.now(); return;
     case 'video-stop': invalidate('iPhone 暂停了画面', false); return;
     case 'video-restart': snapshot(); player.reset(); return;
@@ -157,7 +173,7 @@ function onText(next: WebSocket, text: string): void {
 function failed(next: WebSocket): void {
   if (socket !== next) return;
   closeSocket();
-  if (app.everRendered) invalidate('与 F50 的连接中断，正在重连');
+  if (app.everRendered) invalidate('与接收端的连接中断，正在重连');
   schedule();
 }
 function schedule(): void {
@@ -235,7 +251,8 @@ setInterval(() => {
     jitter_ms: app.local.jitterMs === null ? undefined : +app.local.jitterMs.toFixed(1), loss_pct: app.local.lossPct ?? undefined,
     decoded: st.decoded, dropped: st.dropped, width: st.width || undefined, height: st.height || undefined, decoder: st.decoder, intervals: st.intervals.slice(-30).map(v => +v.toFixed(1)),
     codec: player.codecName ?? undefined, color: player.color ?? undefined,
-    audio_rate: audio.info?.rate, audio_channels: audio.info?.channels, audio_codec: audio.info?.codec, visible: document.visibilityState === 'visible',
+    audio_rate: audio.info?.rate, audio_channels: audio.info?.channels, audio_codec: audio.info?.codec, audio_ms: audio.bufferedMs(),
+    audio_underruns: audio.counters.underruns, audio_drops: audio.counters.drops, visible: document.visibilityState === 'visible',
   }});
   renderRail();
   renderStats(local());
@@ -286,7 +303,11 @@ async function readState(generation: number, epoch: number): Promise<void> {
   } catch (e) {
     if (generation !== authorization || epoch !== stateReadEpoch) return;
     pairingAvailable = false; pairingConfirmation.unavailable();
-    if (e instanceof ApiError && e.status === 401) { invalidate('这块屏幕的授权已失效'); app.authorized = false; authorizationChanged(); app.everRendered = false; closeSocket(); setView('connect'); void boot(); }
+    if (e instanceof ApiError && e.status === 401) {
+      if (await verifyAuthorization(generation)) {
+        app.stateError = '授权仍有效，暂时无法读取状态，正在重试。'; render();
+      }
+    }
     else {app.stateError=`状态更新失败：${(e as Error).message}。正在重试，下方为上次读取结果。`;render();}
   }
 }
@@ -301,7 +322,7 @@ setInterval(async () => {
       const stats=await getStats();
       if(!current()||(stats.session?.id ?? undefined)!==session)return;
       app.stats=stats;app.statsAt=started;app.statsError='';
-    } catch { if(current())app.statsError='F50 采样读取失败'; }
+    } catch { if(current())app.statsError='主机采样读取失败'; }
   }
 }, 1000);
 setInterval(async () => {
@@ -384,6 +405,7 @@ async function addPhone(): Promise<void> {
   });
 }
 async function takeoverNow(): Promise<void> {
+ if(app.buildMismatch){location.reload();return;}
  const context=interactionContext(),current=()=>app.authorized&&interactionContext()===context;
  // VIEWER_BUSY also occurs between tabs sharing the same browser authorization.
  const other=!!app.takeover||!!app.state?.viewer&&app.state.viewer.id!==app.state.me.id;
@@ -395,7 +417,7 @@ const connectActions: ConnectActions = {
   pick: pickPhone,
   openChoose() { const s = app.state; app.choose = {manual: true, picked: phonesOf(s).find(p => p.current || p.preferred)?.id ?? null, deadline: 0}; render(); },
   // Retry the phone that was being called (e.g. a just-paired one), not whichever is preferred.
-  async retry() { await manualCommand('connect',targetPhone(app.state)?.id,()=>{retry=0;app.channelError=null;if(!socket)connectSocket(false);app.connectingSince=Date.now();lastCall=Date.now();void poll();render();}); },
+  async retry() { if(app.buildMismatch){location.reload();return;} await manualCommand('connect',targetPhone(app.state)?.id,()=>{retry=0;app.channelError=null;if(!socket)connectSocket(false);app.connectingSince=Date.now();lastCall=Date.now();void poll();render();}); },
   takeoverNow,
   keep() {
     if (app.takeover) app.takeover = {deadline: null};
@@ -411,7 +433,12 @@ const connectActions: ConnectActions = {
   },
   nearby: nearbyPhones,
   async token(code: string) {
-    try { await admit('screen', {token: code, name: browserName()}); await authorized(); return null; }
+    try {
+      await admit('screen', {token: code, name: browserName()});
+      // Verify the HttpOnly cookie on a second request, not just the token ACK.
+      if (!(await authStatus()).authorized) return '浏览器未保存授权，请允许此站点的 Cookie 后重试';
+      await authorized(); return null;
+    }
     catch (e) { return e instanceof ApiError ? e.message : '暂时无法验证，请稍后再试'; }
   },
 };
@@ -526,6 +553,9 @@ $('s-back').addEventListener('click', back);
 
 // session controls
 $('r-phones').addEventListener('click', () => { location.hash='settings/phones'; });
+for (const action of ['siri','back']) $('r-'+action).addEventListener('click', () => {
+  if(control(action)){app.sheet=false;render();}
+});
 $('r-home').addEventListener('click', () => {
   if (!inputReady || app.view!=='session' || !send({type:'home'})) { toast('画面连接尚未就绪，请稍候'); return; }
   app.sheet=false; render();
@@ -545,6 +575,7 @@ stopBtn.addEventListener('click', async () => {
   });
 });
 async function reconnect(): Promise<void> {
+  if (app.buildMismatch) { location.reload(); return; }
   if(!socket||!app.channel){await takeoverNow();return;}
   await manualCommand('reconnect',undefined,()=>{
     app.stall=null;app.connectingSince=Date.now();toast('已请求重新连接 iPhone，配对保留');void poll();
@@ -583,15 +614,17 @@ let wake: any = null;
 async function keepAwake(): Promise<void> { try { if (!wake && 'wakeLock' in navigator) { wake = await (navigator as any).wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); } } catch { /* optional */ } }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && app.rendered) void keepAwake(); });
 
+function control(action:string):boolean {
+  if(!inputReady||app.view!=='session'||!app.rendered||app.stopped){toast('画面连接尚未就绪，请稍候');return false;}
+  const media:Record<string,number>={play:3,next:4,previous:5};
+  const message=action==='siri'?{type:'siri'}:media[action]?{type:'media',media:media[action]}:{type:'knob',knob:{select:action==='select',home:false,back:action==='back',x:0,y:0,wheel:0}};
+  if(!send(message)){toast('控制未发送，请检查连接后重试');return false;}
+  return true;
+}
 const settingsActions: SettingsActions = {
   setPrefs,
   audioControls:()=>mixer.view(micStatus),
-  control(action:string){
-    if(!inputReady||app.view!=='session'||!app.rendered||app.stopped){toast('画面连接尚未就绪，请稍候');return;}
-    const media:Record<string,number>={play:3,next:4,previous:5};
-    const message=action==='siri'?{type:'siri'}:media[action]?{type:'media',media:media[action]}:{type:'knob',knob:{select:action==='select',home:false,back:action==='back',x:0,y:0,wheel:0}};
-    if(!send(message))toast('控制未发送，请检查连接后重试');
-  },
+  control,
   setLimits: p => void setLimits(p),
   async cmd(cmd,id){
     return manualCommand(cmd,id,async current=>{
@@ -639,6 +672,27 @@ onRender(() => {
 });
 
 // ---------------- authorization and start ----------------
+let authorizationCheck: {owner:number; promise:Promise<boolean>} | null = null;
+function verifyAuthorization(owner:number):Promise<boolean> {
+  if (authorizationCheck?.owner === owner) return authorizationCheck.promise;
+  const request = {owner,promise:checkAuthorization(owner)};
+  authorizationCheck = request;
+  void request.promise.finally(() => { if (authorizationCheck === request) authorizationCheck = null; });
+  return request.promise;
+}
+async function checkAuthorization(owner:number):Promise<boolean> {
+  try {
+    const status = await authStatus();
+    if (owner !== authorization || !app.authorized) return false;
+    if (status.authorized) return true;
+    invalidate('这块屏幕的授权已失效'); closeSocket();
+    app.authorized = false; authorizationChanged(); app.everRendered = false;
+    clearTimeout(retryTimer); setView('connect'); render();
+  } catch {
+    if (owner === authorization) { app.stateError = '暂时无法核实授权，请检查网络后重试。'; render(); }
+  }
+  return false;
+}
 async function authorized(): Promise<void> {
   authorizationChanged();
   app.authorized = true;
@@ -648,11 +702,16 @@ async function boot(): Promise<void> {
   void probeHevc().then(supported=>{app.hevcSupport=supported;render();});
   setupKeypad(connectActions);
   relayout();
-  if (!isSecureContext) { $('c-title').textContent = '需要可信的 HTTPS 地址'; $('c-lead').textContent = '请用 F50 证书匹配的 https:// 地址打开，不要绕过证书警告。'; return; }
+  if (!isSecureContext) { $('c-title').textContent = '需要可信的 HTTPS 地址'; $('c-lead').textContent = '请用 接收端证书匹配的 https:// 地址打开，不要绕过证书警告。'; return; }
   try {
     const st = await authStatus();
     if (st.authorized) { await authorized(); return; }
-    try { await admit('screen', {name: browserName()}); await authorized(); return; } catch { /* a token is required */ }
+    if (!st.required) {
+      await admit('screen', {name: browserName()});
+      if ((await authStatus()).authorized) { await authorized(); return; }
+      $('token-msg').textContent = '浏览器未保存授权，请允许此站点的 Cookie 后重试';
+      $('token-msg').className = 'err';
+    }
     if (st.locked_s) { $('token-msg').textContent = `错误次数太多，${Math.ceil(st.locked_s / 60)} 分钟后再试`; $('token-msg').className = 'err'; }
   } catch { $('token-msg').textContent = '暂时连不上 CowPlay，稍后自动重试'; setTimeout(() => void boot(), 5000); }
   render();

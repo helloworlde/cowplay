@@ -3,11 +3,12 @@
 'require ui';
 
 var schema = {
-    update_status: [], update_check: ['tag'], update_apply: ['id'], update_prepare: ['id'], update_acknowledge: ['id'],
-    status: [], diag: [], phones: [], screens: [], logs: ['level', 'limit', 'module'], timeline: ['scope'], proc: [],
-    token: [], token_reset: [], cert: [], config_export: [], cmd: ['cmd', 'id'], client_remove: ['id'],
+    update_status: [], update_check: ['tag'], update_apply: ['id'], update_acknowledge: ['id'],
+    status: [], diag: [], phones: [], screens: [], logs: ['level', 'limit', 'module'], logs_export: [], timeline: ['scope'], proc: [],
+    token: [], token_reset: [], cert: [], certificate_export: ['kind'], config_export: [], cmd: ['cmd', 'id'], client_remove: ['id'],
     reload: [], selftest: [], bundle: [], service_info: [], network_check: ['port'], network_prepare: ['port', 'fingerprint', 'management_scheme', 'management_port'], network_commit: ['id'], network_status: ['id'], network_confirm: ['id','management_scheme','management_port'], network_cancel: ['id'], network_recover: ['id'], ddns_sync: [], ddns_token: ['token'],
-    mfi_upload: ['certificate', 'private_key'], cert_upload: ['cert', 'key'], cert_rollback: [], cert_renew: [], config_import: ['text'], factory_reset: [], service: ['action']
+    mfi_upload: ['certificate', 'private_key'], cert_upload: ['cert', 'key'], cert_rollback: [], cert_renew: [], config_import: ['text'], factory_reset: [], service: ['action'], network_info: [],
+    tesla_status: [], tesla_ultra_control: ['enabled', 'session', 'context'], tesla_configure: ['vin', 'enabled'], tesla_connect: [], tesla_disconnect: [], tesla_pair: [], tesla_cancel: [], tesla_climate_pair: [], tesla_climate_query: [], tesla_climate_command: ['action', 'on', 'driver_celsius', 'passenger_celsius']
 };
 var calls = {};
 Object.keys(schema).forEach(function(method) {
@@ -21,7 +22,8 @@ return L.Class.extend({
             if (result.error) throw new Error(result.error);
             if (!Object.keys(result).length || method === 'diag' && (!Array.isArray((result.diag || {}).checks) || !Number.isFinite((result.stats || {}).ts_ms))
                 || method === 'selftest' && !Array.isArray(result.steps)
-                || method === 'bundle' && result.kind !== 'cowplay-diagnostics') throw new Error('CowPlay 返回的数据不完整，请刷新页面并核对核心与 LuCI 版本');
+                || method === 'bundle' && result.kind !== 'cowplay-diagnostics'
+                || method === 'logs_export' && (typeof result.text !== 'string' || !result.text.length)) throw new Error('CowPlay 返回的数据不完整，请刷新页面并核对核心与 LuCI 版本');
             return result;
         });
     },

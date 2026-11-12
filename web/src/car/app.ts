@@ -22,6 +22,7 @@ export const app = {
   /** The viewer channel is up (hello received). */
   channel: false,
   channelError: null as string | null,
+  buildMismatch: false,
   stateError: null as string | null,
   /** A frame was painted in the current connection. */
   rendered: false,

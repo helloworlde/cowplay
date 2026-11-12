@@ -56,14 +56,26 @@ struct AudioQueue {
     configs: std::collections::BTreeMap<u8, Vec<u8>>,
     packets: std::collections::VecDeque<Vec<u8>>,
     bytes: usize,
-    generation: u64,
+    generations: [u64; 3],
+    /// Packets discarded because the viewer fell behind, for the numeric audio probe.
+    dropped: u64,
 }
 impl AudioQueue {
+    /// A prompt's lifecycle must not flush music or restart its decoder.
+    fn restart_stream(&mut self, kind: u8) -> u64 {
+        self.packets.retain(|packet| packet.get(1) != Some(&kind));
+        self.bytes = self.packets.iter().map(Vec::len).sum();
+        let generation = &mut self.generations[usize::from(kind - 100)];
+        *generation = generation.wrapping_add(1);
+        *generation
+    }
     /// Drop queued packets and make the viewer reload every stream configuration.
     fn restart(&mut self) {
         self.packets.clear();
         self.bytes = 0;
-        self.generation = self.generation.wrapping_add(1);
+        for generation in &mut self.generations {
+            *generation = generation.wrapping_add(1);
+        }
     }
 }
 struct AudioFeedback {
@@ -76,6 +88,7 @@ struct AudioFeedback {
 pub const WS_WRITE_LIMIT: usize = f50_core::media::MAX_MEDIA + 65536 + 64;
 pub struct Hub {
     pub vehicle: Arc<vehicle::Feed>,
+    ultra_probe: Mutex<std::sync::Weak<ultra::Probe>>,
     session_epoch: AtomicU64,
     last_keyframe: Mutex<Option<std::time::Instant>>,
     audio: Mutex<AudioQueue>,
@@ -121,13 +134,37 @@ pub struct MicTarget {
     pub key: [u8; 32],
     pub rate: u32,
     pub channels: u8,
+    pub codec: u8,
+    pub bitrate: Option<u32>,
 }
 struct MicUplink {
+    epoch: u64,
     target: MicTarget,
     socket: Option<std::net::UdpSocket>,
     counters: f50_core::audio::MicCounters,
     pending: Vec<u8>,
     packets: u64,
+}
+
+fn send_mic_packet(m: &mut MicUplink, body: &[u8], samples: u32) {
+    if let (Ok(packet), Some(socket)) = (
+        f50_core::audio::seal_mic_packet(&m.target.key, m.target.kind, &mut m.counters, body, samples),
+        m.socket.as_ref(),
+    ) {
+        if socket.send_to(&packet, m.target.addr).is_ok() { m.packets += 1; }
+    }
+}
+
+/// RFC 6716 section 3.1: Opus RTP timestamps always use 48 kHz.
+fn opus_samples(packet: &[u8]) -> Option<u32> {
+    let toc = *packet.first()?;
+    let config = toc >> 3;
+    let frame_samples = if config >= 16 { 120 << (config & 3) }
+        else if config >= 12 { 480 << (config & 1) }
+        else { [480, 960, 1920, 2880][(config & 3) as usize] };
+    let frames = match toc & 3 { 0 => 1, 1 | 2 => 2, _ => u32::from(*packet.get(1)? & 0x3f) };
+    let samples = frame_samples * frames;
+    (frames > 0 && samples <= 5760).then_some(samples)
 }
 #[derive(Debug)]
 pub enum Control {
@@ -158,7 +195,26 @@ pub struct DisplaySpec {
 }
 impl Hub {
     pub fn observation(&self) -> serde_json::Value {
-        serde_json::json!({"verified":self.phone_verified.load(Ordering::Acquire),"phone":self.phone_active.load(Ordering::Acquire),"viewer":self.viewer.load(Ordering::Acquire),"video":self.video_received.load(Ordering::Acquire),"display":*self.display_report.lock().unwrap(),"protocol":*self.session_status.lock().unwrap()})
+        serde_json::json!({"verified":self.phone_verified.load(Ordering::Acquire),"phone":self.phone_active.load(Ordering::Acquire),"viewer":self.viewer.load(Ordering::Acquire),"video":self.video_received.load(Ordering::Acquire),"display":*self.display_report.lock().unwrap(),"protocol":*self.session_status.lock().unwrap(),"ultra":self.ultra_observation()})
+    }
+    pub fn ultra_observation(&self) -> serde_json::Value {
+        let probe = self.ultra_probe.lock().unwrap().upgrade();
+        let channels = probe.as_ref().map_or([false; 2], |p| p.connected_channels());
+        let climate_control = probe.as_ref().map_or(serde_json::json!({"context":self.vehicle.climate().context,"available":false,"allowed":false}), |p| p.climate_control());
+        serde_json::json!({"enabled":ultra::enabled(),"channels":channels,"climate_control":climate_control,"session":self.media_generation()})
+    }
+    pub fn set_ultra_climate_control(&self, enabled: bool, session: u64, context: u64) -> Result<(), &'static str> {
+        let admission = self.phones.snapshot().admission;
+        let probe = self.ultra_probe.lock().unwrap();
+        if session != self.media_generation() { return Err("CarPlay 会话已变化，请刷新后重新确认"); }
+        let Some(probe) = probe.upgrade() else { return if enabled { Err("当前没有 Ultra 会话") } else { Ok(()) }; };
+        if enabled && (!self.phone_verified.load(Ordering::Acquire) || !self.has_phone_session() || !admission || self.planned_restart.load(Ordering::Acquire)) { return Err("请先连接并认证当前 iPhone"); }
+        probe.set_climate_control(enabled, context)
+    }
+    pub(crate) fn set_ultra_probe(&self, probe: Option<&Arc<ultra::Probe>>) {
+        let mut current = self.ultra_probe.lock().unwrap();
+        if let Some(previous) = current.upgrade() { previous.revoke_climate_control(); }
+        *current = probe.map_or_else(std::sync::Weak::new, Arc::downgrade);
     }
     fn display(&self, state: &str) {
         let code = match state {
@@ -234,23 +290,42 @@ impl Hub {
             })
             .collect()
     }
-    pub fn audio_config(&self, kind: u8, wire: Vec<u8>) -> Result<(), &'static str> {
+    /// Returns this stream's generation, used to reject packets from replaced receivers.
+    pub fn audio_config(&self, kind: u8, wire: Vec<u8>) -> Result<u64, &'static str> {
         if !(100..=102).contains(&kind) || wire.len() > 256 {
             return Err("invalid audio config");
         }
         let mut a = self.audio.lock().unwrap();
         a.configs.insert(kind, wire);
-        a.restart();
+        let generation = a.restart_stream(kind);
         self.notify.notify_one();
-        Ok(())
+        Ok(generation)
     }
-    pub fn audio_packet(&self, wire: Vec<u8>) {
-        if !self.viewer.load(Ordering::Acquire) || wire.len() > 4096 {
+    /// Audio packets discarded because the viewer fell behind (numeric probe only).
+    pub fn audio_dropped(&self) -> u64 {
+        self.audio.lock().unwrap().dropped
+    }
+    pub fn audio_packet(&self, generation: u64, sample: u32, wire: Vec<u8>) {
+        if wire.len() < 10 || wire.len() > 4096 || wire[0] != 4 || !(100..=102).contains(&wire[1]) {
             return;
         }
+        let kind = wire[1];
         let mut a = self.audio.lock().unwrap();
-        if a.packets.len() >= 64 || a.bytes + wire.len() > 262144 {
-            a.restart();
+        if a.generations[usize::from(kind - 100)] != generation || !a.configs.contains_key(&kind) {
+            return;
+        }
+        // Keep feedback and queue admission on the same side of a stream restart.
+        self.audio_received(kind, sample, u64::from_le_bytes(wire[2..10].try_into().unwrap()));
+        if !self.viewer.load(Ordering::Acquire) {
+            return;
+        }
+        // Overflow drops only the oldest packets. Each AAC-LC/PCM/Opus packet decodes on its own,
+        // so a stalled viewer loses a little audio instead of a full stream reconfiguration.
+        while !a.packets.is_empty() && (a.packets.len() >= 64 || a.bytes + wire.len() > 262144) {
+            if let Some(old) = a.packets.pop_front() {
+                a.bytes -= old.len();
+                a.dropped = a.dropped.wrapping_add(1);
+            }
         }
         a.bytes += wire.len();
         a.packets.push_back(wire);
@@ -283,6 +358,7 @@ impl Hub {
         (
             Arc::new(Self {
                 vehicle: vehicle::Feed::new(),
+                ultra_probe: Mutex::new(std::sync::Weak::new()),
                 session_epoch: AtomicU64::new(0),
                 last_keyframe: Mutex::new(None),
                 phone_active: AtomicBool::new(false),
@@ -294,7 +370,8 @@ impl Hub {
                     configs: Default::default(),
                     packets: Default::default(),
                     bytes: 0,
-                    generation: 0,
+                    generations: [0; 3],
+                    dropped: 0,
                 }),
                 queue: Mutex::new(VideoQueue::new(8 * 1024 * 1024, 32)),
                 config: Mutex::new(None),
@@ -385,11 +462,14 @@ impl Hub {
         accepted
     }
     pub fn stop_audio(&self, kind: u8) {
+        if !(100..=102).contains(&kind) {
+            return;
+        }
         self.mic_stop(Some(kind));
         self.audio_feedback.lock().unwrap().remove(&kind);
         let mut a = self.audio.lock().unwrap();
         a.configs.remove(&kind);
-        a.restart();
+        a.restart_stream(kind);
         self.notify.notify_one();
     }
     /// The CowPlay icon on the CarPlay home screen was tapped (`requestUI`): open car settings.
@@ -426,19 +506,25 @@ impl Hub {
         }
         self.planned_restart.store(true, Ordering::Release);
         let sent = self.control.try_send(Control::EndSession).is_ok();
+        if sent { self.revoke_ultra_climate_control(); }
         if !sent {
             self.planned_restart.store(false, Ordering::Release);
         }
         sent
     }
     pub fn has_phone_session(&self) -> bool { self.phone_active.load(Ordering::Acquire) }
+    fn revoke_ultra_climate_control(&self) {
+        if let Some(probe) = self.ultra_probe.lock().unwrap().upgrade() { probe.revoke_climate_control(); }
+    }
     pub fn pause_phone(&self) -> std::io::Result<u64> {
         let epoch = self.phones.pause()?;
+        self.revoke_ultra_climate_control();
         *self.pair_setup_until.lock().unwrap() = None;
         Ok(epoch)
     }
     pub fn pause_phone_if_current(&self,expected:u64)->std::io::Result<u64> {
         let epoch=self.phones.pause_if_current(expected)?;
+        self.revoke_ultra_climate_control();
         *self.pair_setup_until.lock().unwrap()=None;
         Ok(epoch)
     }
@@ -451,8 +537,10 @@ impl Hub {
             .and_then(|s| s.set_nonblocking(true).map(|_| s))
             .ok();
         diag::diag().event("info", "audio", format!("iPhone 打开{}麦克风输入（{} Hz）", if target.audio_type == "telephony" { "通话" } else { "Siri" }, target.rate));
-        *self.mic.lock().unwrap() = Some(MicUplink { target, socket, counters: Default::default(), pending: Vec::new(), packets: 0 });
-        self.mic_epoch.fetch_add(1, Ordering::AcqRel);
+        let mut mic = self.mic.lock().unwrap();
+        let epoch = self.mic_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        *mic = Some(MicUplink { epoch, target, socket, counters: Default::default(), pending: Vec::new(), packets: 0 });
+        drop(mic);
         self.notify.notify_one();
     }
     pub fn mic_stop(&self, kind: Option<u8>) {
@@ -467,30 +555,31 @@ impl Hub {
     }
     fn mic_state(&self) -> serde_json::Value {
         match self.mic.lock().unwrap().as_ref() {
-            Some(m) => serde_json::json!({"type":"mic","state":"start","rate":m.target.rate,"channels":m.target.channels,"audioType":m.target.audio_type}),
+            Some(m) => serde_json::json!({"type":"mic","state":"start","epoch":m.epoch,"rate":m.target.rate,"channels":m.target.channels,"codec":if m.target.codec==2 {"opus"} else {"lpcm"},"samplesPerPacket":m.target.rate/50,"bitrate":m.target.bitrate,"audioType":m.target.audio_type}),
             None => serde_json::json!({"type":"mic","state":"stop"}),
         }
     }
-    /// Browser PCM16LE mono at the negotiated rate → 20 ms big-endian RTP packets to the phone.
-    fn mic_pcm(&self, pcm_le: &[u8]) {
+    /// The input epoch belongs to this exact phone stream, including queued browser encodes.
+    fn mic_input(&self, tag: u8, epoch: u64, payload: &[u8]) {
         let mut guard = self.mic.lock().unwrap();
         let Some(m) = guard.as_mut() else { return };
+        if m.epoch != epoch || tag != if m.target.codec == 2 { 9 } else { 8 } { return; }
+        if m.target.codec == 2 {
+            // One raw 20 ms Opus packet, never PCM or Ogg. RTP uses the 48 kHz clock.
+            if payload.len() <= 1275 && opus_samples(payload) == Some(960) {
+                send_mic_packet(m, payload, 960);
+            }
+            return;
+        }
         let frame = (m.target.rate as usize / 50) * 2 * m.target.channels as usize;
         if m.pending.len() > frame * 25 {
             m.pending.clear(); // never let a stalled uplink build latency
         }
-        m.pending.extend(pcm_le.chunks_exact(2).flat_map(|s| [s[1], s[0]]));
+        m.pending.extend(payload.chunks_exact(2).flat_map(|s| [s[1], s[0]]));
         while m.pending.len() >= frame {
             let body: Vec<u8> = m.pending.drain(..frame).collect();
             let samples = (frame / 2 / m.target.channels as usize) as u32;
-            if let (Ok(packet), Some(socket)) = (
-                f50_core::audio::seal_mic_packet(&m.target.key, m.target.kind, &mut m.counters, &body, samples),
-                m.socket.as_ref(),
-            ) {
-                if socket.send_to(&packet, m.target.addr).is_ok() {
-                    m.packets += 1;
-                }
-            }
+            send_mic_packet(m, &body, samples);
         }
     }
     pub fn night_mode(&self) -> bool {
@@ -590,6 +679,7 @@ impl Hub {
         self.notify.notify_one();
     }
     pub fn reset(&self) {
+        self.set_ultra_probe(None);
         let viewer = self.viewer_client.lock().unwrap();
         self.phone_verified.store(false, Ordering::Release);
         self.session_epoch.fetch_add(1, Ordering::AcqRel);
@@ -648,10 +738,15 @@ async fn asset(State(hub): State<Arc<Hub>>, uri: axum::http::Uri) -> Response {
                 "text/css"
             } else if name.ends_with(".svg") {
                 "image/svg+xml"
+            } else if name.ends_with(".png") {
+                "image/png"
             } else {
                 "text/html; charset=utf-8"
             };
-            ([(axum::http::header::CONTENT_TYPE,mime),(axum::http::header::CACHE_CONTROL,"no-store"),(axum::http::header::REFERRER_POLICY,"no-referrer"),(axum::http::header::CONTENT_SECURITY_POLICY,"default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-ancestors 'none'")],f.contents()).into_response()
+            // Vite names assets by content hash; HTML must always select the current
+            // bundle while icons/scripts/styles can be reused locally, even offline.
+            let cache = if name.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-store" };
+            ([(axum::http::header::CONTENT_TYPE,mime),(axum::http::header::CACHE_CONTROL,cache),(axum::http::header::X_CONTENT_TYPE_OPTIONS,"nosniff"),(axum::http::header::REFERRER_POLICY,"no-referrer"),(axum::http::header::CONTENT_SECURITY_POLICY,"default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-ancestors 'none'")],f.contents()).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -769,7 +864,7 @@ async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
     let _ = h.control.try_send(Control::Keyframe);
     let mut previous: Option<Vec<u8>> = None;
     let mut previous_status = "";
-    let mut audio_generation = Some(0);
+    let mut audio_generations = Some([0; 3]);
     let mut video_epoch = h.video_epoch.load(Ordering::Acquire);
     let mut host_ui_epoch = h.host_ui_epoch.load(Ordering::Acquire);
     let mut reload_epoch = h.reload_epoch.load(Ordering::Acquire);
@@ -821,7 +916,7 @@ async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
         if current_epoch != epoch {
             epoch = current_epoch;
             previous = None;
-            audio_generation = None;
+            audio_generations = None;
             if !send(
                 &mut socket,
                 Message::Text(r#"{"type":"session-reset"}"#.into()),
@@ -870,34 +965,32 @@ async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
             }
             previous = config;
         }
-        let (current_audio_generation, configs, packet) = {
+        let (current_audio_generations, updates, packets) = {
             let mut a = h.audio.lock().unwrap();
-            let configs = if audio_generation != Some(a.generation) {
-                Some(a.configs.values().cloned().collect::<Vec<_>>())
-            } else {
-                None
-            };
-            let packet = a.packets.pop_front();
-            if let Some(p) = &packet {
-                a.bytes -= p.len();
-            }
-            (a.generation, configs, packet)
+            let updates: Vec<_> = (100..=102).filter_map(|kind| {
+                let index = usize::from(kind - 100);
+                (audio_generations.as_ref().map(|g: &[u64; 3]| g[index]) != Some(a.generations[index]))
+                    .then(|| (kind, a.configs.get(&kind).cloned()))
+            }).collect();
+            // Send every queued audio packet now: they are small, and pacing them one per video
+            // frame let a large frame starve the browser buffer.
+            let packets: Vec<Vec<u8>> = a.packets.drain(..).collect();
+            a.bytes = 0;
+            (a.generations, updates, packets)
         };
-        if let Some(configs) = configs {
-            for kind in 100..=102 {
-                if !send(&mut socket, Message::Binary(vec![6, kind].into())).await {
-                    return;
-                }
+        for (kind, config) in updates {
+            if !send(&mut socket, Message::Binary(vec![6, kind].into())).await {
+                return;
             }
-            for config in configs {
+            if let Some(config) = config {
                 if !send(&mut socket, Message::Binary(config.into())).await {
                     return;
                 }
             }
-            audio_generation = Some(current_audio_generation);
         }
-        let had_audio = packet.is_some();
-        if let Some(packet) = packet {
+        audio_generations = Some(current_audio_generations);
+        let had_audio = !packets.is_empty();
+        for packet in packets {
             if !send(&mut socket, Message::Binary(packet.into())).await {
                 return;
             }
@@ -997,12 +1090,12 @@ async fn viewer_message(
             }
             true
         }
-        // Browser microphone PCM (tag 8); any other binary input is a protocol error.
+        // Browser microphone: codec tag, LE64 stream epoch, then PCM16LE or raw Opus.
         Some(Ok(Message::Binary(b))) => {
-            if b.first() != Some(&8) {
+            if !matches!(b.first(), Some(8 | 9)) || b.len() < 9 {
                 return false;
             }
-            h.mic_pcm(&b[1..]);
+            h.mic_input(b[0], u64::from_le_bytes(b[1..9].try_into().unwrap()), &b[9..]);
             true
         }
         Some(Ok(Message::Ping(b))) => send(socket, Message::Pong(b)).await,
@@ -1084,6 +1177,60 @@ mod tests {
         assert_eq!(h.observation()["display"], "WAITING_BROWSER_REPORT");
     }
     #[test]
+    fn audio_overflow_drops_oldest_packets_without_reconfiguring_streams() {
+        let (h, _) = Hub::new("synthetic-token-for-tests-only".into(), "https://test.invalid".into());
+        h.viewer.store(true, Ordering::Relaxed);
+        let generation = h.audio_config(102, vec![3, 102, 1]).unwrap();
+        let generations = h.audio.lock().unwrap().generations;
+        for i in 0..70u8 { let mut packet = vec![4, 102]; packet.extend(u64::from(i).to_le_bytes()); h.audio_packet(generation, u32::from(i), packet); }
+        let a = h.audio.lock().unwrap();
+        assert_eq!(a.generations, generations, "a slow viewer must not restart every audio stream");
+        assert_eq!(a.packets.len(), 64);
+        assert_eq!(a.packets.front().unwrap()[2], 6, "the oldest packets are the ones discarded");
+        assert_eq!(a.packets.back().unwrap()[2], 69, "the newest packet is always kept");
+        assert_eq!(a.dropped, 6);
+        assert_eq!(a.bytes, 64 * 10);
+        assert!(a.configs.contains_key(&102));
+    }
+    #[test]
+    fn audio_restart_preserves_other_queues_and_rejects_superseded_packets() {
+        let (h, _) = Hub::new("synthetic-token-for-tests-only".into(), "https://test.invalid".into());
+        h.viewer.store(true, Ordering::Relaxed);
+        let music = vec![3, 102, 1];
+        let prompt = vec![3, 101, 2];
+        let packet = |kind, marker: u64| { let mut wire = vec![4, kind]; wire.extend(marker.to_le_bytes()); wire };
+        let music_generation = h.audio_config(102, music.clone()).unwrap();
+        let prompt_generation = h.audio_config(101, prompt.clone()).unwrap();
+        h.audio_packet(music_generation, 1, packet(102, 1));
+        h.audio_packet(prompt_generation, 2, packet(101, 2));
+        let next_prompt = h.audio_config(101, prompt).unwrap();
+        assert_ne!(next_prompt, prompt_generation, "same format still starts a new receiver generation");
+        h.audio_packet(prompt_generation, 3, packet(101, 3));
+        h.audio_packet(music_generation, 4, packet(102, 4));
+        h.audio_packet(next_prompt, 5, packet(101, 5));
+        h.stop_audio(101);
+        h.audio_packet(next_prompt, 6, packet(101, 6));
+        {
+            let a = h.audio.lock().unwrap();
+            assert_eq!(a.packets.iter().cloned().collect::<Vec<_>>(), vec![packet(102, 1), packet(102, 4)]);
+            assert_eq!(a.bytes, 20);
+        }
+        let next_music = h.audio_config(102, music.clone()).unwrap();
+        h.audio_metadata(102, 48000, 7);
+        h.audio_packet(music_generation, 8, packet(102, 8));
+        assert!(h.audio.lock().unwrap().packets.is_empty());
+        assert!(h.audio_feedback.lock().unwrap()[&102].first.is_none(), "stale packets must not change new-stream feedback");
+        h.audio_packet(next_music, 9, packet(102, 9));
+        assert_eq!(h.audio_feedback.lock().unwrap()[&102].first, Some(9));
+        h.reset();
+        let after_reset = h.audio_config(102, music).unwrap();
+        h.audio_packet(next_music, 10, packet(102, 10));
+        h.audio_packet(after_reset, 11, packet(102, 11));
+        let a = h.audio.lock().unwrap();
+        assert_eq!(a.packets.iter().cloned().collect::<Vec<_>>(), vec![packet(102, 11)]);
+        assert_eq!(a.bytes, 10);
+    }
+    #[test]
     fn feedback_requires_synced_clock_and_recent_browser_completion() {
         let (h, _) = Hub::new(
             "synthetic-token-for-tests-only".into(),
@@ -1136,14 +1283,15 @@ mod tests {
         assert!(h.pair_setup_remaining() > Duration::from_secs(119), "a later iAP2 handoff re-opens it");
     }
     #[test]
-        fn browser_mic_pcm_becomes_sealed_big_endian_rtp() {
+    fn browser_mic_pcm_becomes_sealed_big_endian_rtp() {
         let (h, _) = Hub::new("synthetic-token-for-tests-only".into(), "https://example.invalid".into());
         let phone = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         phone.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        h.mic_start(MicTarget { kind: 100, audio_type: "telephony".into(), addr: phone.local_addr().unwrap(), key: [9; 32], rate: 16000, channels: 1 });
+        h.mic_start(MicTarget { kind: 100, audio_type: "telephony".into(), addr: phone.local_addr().unwrap(), key: [9; 32], rate: 16000, channels: 1, codec:3, bitrate:None });
+        let epoch = h.mic_state()["epoch"].as_u64().unwrap();
         let pcm: Vec<u8> = (0..320u16).flat_map(|i| i.to_le_bytes()).collect();
-        h.mic_pcm(&pcm[..300]);
-        h.mic_pcm(&pcm[300..]);
+        h.mic_input(8, epoch, &pcm[..300]);
+        h.mic_input(8, epoch, &pcm[300..]);
         let mut buf = [0u8; 2048];
         let n = phone.recv(&mut buf).unwrap();
         let packet = &buf[..n];
@@ -1154,10 +1302,48 @@ mod tests {
         assert_eq!(plain.len(), 640, "20 ms of 16 kHz mono");
         assert_eq!(&plain[2..4], &1u16.to_be_bytes(), "samples are big-endian on the wire");
         h.mic_stop(Some(100));
-        h.mic_pcm(&pcm);
+        h.mic_input(8, epoch, &pcm);
         assert!(phone.recv(&mut buf).is_err(), "nothing is sent after the phone closes the input stream");
     }
-#[tokio::test]
+    #[test]
+    fn opus_uplink_preserves_payload_clock_and_isolates_replaced_streams() {
+        let (h, _) = Hub::new("synthetic-token-for-tests-only".into(), "https://example.invalid".into());
+        let phone = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        phone.set_nonblocking(true).unwrap();
+        let target = || MicTarget {kind:100,audio_type:"speechRecognition".into(),addr:phone.local_addr().unwrap(),key:[7;32],rate:48000,channels:1,codec:2,bitrate:Some(64000)};
+        h.mic_start(target());
+        let old_epoch = h.mic_state()["epoch"].as_u64().unwrap();
+        // RFC 6716: CELT 20 ms mono, one raw frame (the framing layer does not decode it).
+        let raw = [0xf8, 0x12, 0x34, 0x56];
+        h.mic_input(9, old_epoch, &raw);
+        h.mic_input(9, old_epoch, &raw);
+        phone.set_nonblocking(false).unwrap();
+        phone.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut buf = [0u8; 2048];
+        let mut stamps = Vec::new();
+        for _ in 0..2 {
+            let n = phone.recv(&mut buf).unwrap();
+            let packet = &buf[..n];
+            let mut nonce = [0;12];nonce[4..].copy_from_slice(&packet[n-8..]);
+            let plain = f50_core::crypto::open(&[7;32],&nonce,&packet[12..n-8],&packet[4..12]).unwrap();
+            assert_eq!(plain,raw,"compressed packets must not be byte-swapped or wrapped in Ogg");
+            stamps.push(u32::from_be_bytes(packet[4..8].try_into().unwrap()));
+        }
+        assert_eq!(stamps[1].wrapping_sub(stamps[0]),960,"RTP advances by decoded samples, not compressed byte length");
+        phone.set_nonblocking(true).unwrap();
+        h.mic_start(target());
+        let epoch = h.mic_state()["epoch"].as_u64().unwrap();assert_ne!(old_epoch,epoch);
+        h.mic_input(9,old_epoch,&raw);
+        h.mic_input(8,epoch,&[0;640]);
+        h.mic_input(9,epoch,&[0xf0,1,2]); // 10 ms, not the negotiated 20 ms.
+        assert_eq!(phone.recv(&mut buf).unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
+        h.mic_input(9,epoch,&raw);
+        phone.set_nonblocking(false).unwrap();assert!(phone.recv(&mut buf).is_ok());
+        phone.set_nonblocking(true).unwrap();
+        h.mic_stop(Some(100));h.mic_input(9,epoch,&raw);
+        assert_eq!(phone.recv(&mut buf).unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
+    }
+    #[tokio::test]
     async fn static_and_health() {
         let (h, _) = Hub::new(
             "synthetic-token-for-tests-only".into(),
@@ -1197,6 +1383,18 @@ mod tests {
     }
     fn h_missing() -> Arc<Hub> {
         Hub::new("synthetic-token-for-tests-only".into(), "https://example.invalid".into()).0
+    }
+    #[tokio::test]
+    async fn bundled_icon_has_image_mime_and_hashed_assets_are_cacheable() {
+        let assets=WEB.get_dir("assets").unwrap();
+        let icon=assets.files().find(|f|f.path().extension().is_some_and(|e|e=="png")).unwrap();
+        let response=router(h_missing()).oneshot(axum::http::Request::builder()
+            .uri(format!("/{}",icon.path().display())).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(),StatusCode::OK);
+        assert_eq!(response.headers()[axum::http::header::CONTENT_TYPE],"image/png");
+        assert_eq!(response.headers()[axum::http::header::CACHE_CONTROL],"public, max-age=31536000, immutable");
+        let bytes=axum::body::to_bytes(response.into_body(),1<<20).await.unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
     }
     #[test]
     fn congestion_counts_evicted_frames_even_when_current_idr_is_accepted() {
@@ -1243,6 +1441,127 @@ mod wire_tests {
         connect_async,
         tungstenite::{client::IntoClientRequest, Message as WsMessage},
     };
+    #[tokio::test]
+    async fn auxiliary_audio_does_not_interrupt_music() {
+        let (h, _control) = Hub::new("synthetic-token-for-tests-only".into(), "https://test.invalid".into());
+        let music = f50_core::audio::Format::from_bits(0x800000).unwrap().config(102, "media").unwrap();
+        let prompt = f50_core::audio::Format::from_bits(0x10000000).unwrap().config(101, "default").unwrap();
+        let music_generation = h.audio_config(102, music).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(h.clone());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut request = format!("ws://{addr}/ws").into_client_request().unwrap();
+        request.headers_mut().insert("Origin", "https://test.invalid".parse().unwrap());
+        request.headers_mut().insert("Cookie", test_cookie(&h).parse().unwrap());
+        let (mut ws, _) = connect_async(request).await.unwrap();
+        ws.send(WsMessage::Text(handshake().into())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let m = ws.next().await.unwrap().unwrap();
+                if let WsMessage::Binary(b) = m {
+                    if b.starts_with(&[3, 102]) { break; }
+                }
+            }
+        }).await.unwrap();
+        let mut results = Vec::new();
+        for (phase, marker) in [("start_auxiliary_101", 1u8), ("stop_auxiliary_101", 2u8)].into_iter().cycle().take(12) {
+            if marker == 1 { h.audio_config(101, prompt.clone()).unwrap(); }
+            else { h.stop_audio(101); }
+            let mut packet = vec![4, 102];
+            packet.extend(u64::from(marker).to_le_bytes());
+            packet.extend([0x12, 0x34]); // Synthetic payload; this test checks delivery, not AAC decoding.
+            h.audio_packet(music_generation, u32::from(marker), packet.clone());
+            let mut messages = Vec::new();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let m = ws.next().await.unwrap().unwrap();
+                    if let WsMessage::Binary(b) = m {
+                        if b.as_ref() == packet { break; }
+                        messages.push(b.to_vec());
+                    }
+                }
+            }).await.expect("music packet must remain deliverable on the same viewer connection");
+            let stopped_music = messages.iter().any(|b| b.as_slice() == [6, 102]);
+            let reconfigured_music = messages.iter().any(|b| b.starts_with(&[3, 102]));
+            results.push(serde_json::json!({"phase":phase,"stopped_music":stopped_music,"reconfigured_music":reconfigured_music,"wire_messages":messages}));
+        }
+        println!("STREAM_ISOLATION={}", serde_json::to_string(&results).unwrap());
+        if let Ok(path) = std::env::var("COWPLAY_AUDIO_WIRE_TRACE") {
+            std::fs::write(path, serde_json::to_vec_pretty(&results).unwrap()).unwrap();
+        }
+        ws.close(None).await.unwrap();
+        task.abort();
+        assert!(results.iter().all(|r| r["stopped_music"] == false && r["reconfigured_music"] == false),
+            "starting/stopping stream 101 must not stop or reconfigure stream 102: {results:?}");
+    }
+
+    #[tokio::test]
+    async fn audio_same_format_restart_session_reset_and_viewer_reconnect() {
+        type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+        async fn open(h: &Hub, addr: SocketAddr) -> Socket {
+            let mut request = format!("ws://{addr}/ws").into_client_request().unwrap();
+            request.headers_mut().insert("Origin", "https://test.invalid".parse().unwrap());
+            request.headers_mut().insert("Cookie", test_cookie(h).parse().unwrap());
+            let (mut ws, _) = connect_async(request).await.unwrap();
+            ws.send(WsMessage::Text(handshake().into())).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if let WsMessage::Binary(b) = ws.next().await.unwrap().unwrap() {
+                        assert_ne!(b[0], 4, "configuration must precede packets on reconnect");
+                        if b.starts_with(&[3, 102]) { break; }
+                    }
+                }
+            }).await.unwrap();
+            ws
+        }
+        async fn through(ws: &mut Socket, packet: &[u8]) -> Vec<WsMessage> {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                let mut messages = Vec::new();
+                loop {
+                    let message = ws.next().await.unwrap().unwrap();
+                    if matches!(&message, WsMessage::Binary(b) if b.as_ref() == packet) { return messages; }
+                    messages.push(message);
+                }
+            }).await.expect("current audio must remain deliverable")
+        }
+        let packet = |marker: u64| { let mut wire = vec![4, 102]; wire.extend(marker.to_le_bytes()); wire };
+        let (h, mut control) = Hub::new("synthetic-token-for-tests-only".into(), "https://test.invalid".into());
+        let config = f50_core::audio::Format::from_bits(0x800000).unwrap().config(102, "media").unwrap();
+        let mut generation = h.audio_config(102, config.clone()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(h.clone());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut ws = open(&h, addr).await;
+        for phase in 0..3 {
+            let old_generation = generation;
+            match phase { 1 => h.stop_audio(102), 2 => h.reset(), _ => {} }
+            generation = h.audio_config(102, config.clone()).unwrap();
+            h.audio_packet(old_generation, 999, packet(999));
+            let current = packet(phase + 1);
+            h.audio_packet(generation, phase as u32 + 1, current.clone());
+            let messages = through(&mut ws, &current).await;
+            let binaries: Vec<_> = messages.iter().filter_map(|m| if let WsMessage::Binary(b) = m { Some(b.as_ref()) } else { None }).collect();
+            assert_eq!(binaries.iter().filter(|b| **b == [6, 102]).count(), 1);
+            assert_eq!(binaries.iter().filter(|b| b.starts_with(&[3, 102])).count(), 1);
+            assert!(!binaries.iter().any(|b| b.starts_with(&[4, 102])), "stale receiver packet crossed restart");
+            assert_eq!(messages.iter().any(|m| matches!(m, WsMessage::Text(t) if t.contains("session-reset"))), phase == 2);
+        }
+        ws.close(None).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !matches!(control.recv().await.unwrap(), Control::ViewerDisconnected) {}
+        }).await.unwrap();
+        assert!(!h.viewer.load(Ordering::Acquire));
+        h.audio_packet(generation, 20, packet(20));
+        let mut reconnected = open(&h, addr).await;
+        let current = packet(21);
+        h.audio_packet(generation, 21, current.clone());
+        let messages = through(&mut reconnected, &current).await;
+        assert!(!messages.iter().any(|m| matches!(m, WsMessage::Binary(b) if b.starts_with(&[4, 102]))), "offline audio must not replay on reconnect");
+        reconnected.close(None).await.unwrap();
+        task.abort();
+    }
     #[tokio::test]
     async fn verified_tls_slow_stopped_and_recovery() {
         use tokio::io::AsyncReadExt;
@@ -1640,5 +1959,13 @@ pub mod settings;
 pub mod discovery;
 
 pub mod pairing_store;
+
+#[cfg(feature = "resource-probe")]
+impl Hub {
+    pub fn resource_snapshot(&self) -> serde_json::Value {
+        let a = self.audio.lock().unwrap();
+        serde_json::json!({"video_bytes":self.queue.lock().unwrap().bytes(),"audio_bytes":a.bytes,"audio_packets":a.packets.len(),"viewer":self.viewer.load(Ordering::Acquire),"control_free":self.control.capacity()})
+    }
+}
 
 pub mod phones;

@@ -1,7 +1,31 @@
 //! Shared vehicle readings, freshness and availability for iAP2 and Ultra transports.
-use f50_core::vehicle::{Category, Telemetry, Update, Values};
+use f50_core::vehicle::{Category, ClimateCommand, ClimateState, Telemetry, Update, Values};
 use std::sync::{Arc, Mutex};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
+
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct ClimateSnapshot {
+    pub context: u64,
+    pub authorized: bool,
+    pub state: Option<ClimateState>,
+    pub received_ms: Option<u64>,
+}
+impl ClimateSnapshot {
+    pub fn current(&self) -> Option<&ClimateState> {
+        self.state.as_ref().filter(|s| self.authorized && self.received_ms.is_some_and(|at| s.fresh(at, now_ms())))
+    }
+}
+pub struct ClimateRequest {
+    pub context: u64,
+    pub command: Option<ClimateCommand>,
+    pub grant: watch::Receiver<Option<u64>>,
+    pub reply: oneshot::Sender<bool>,
+}
+impl ClimateRequest {
+    pub fn valid(&self, context: u64) -> bool {
+        self.context == context && *self.grant.borrow() == Some(self.context) && !self.grant.has_changed().unwrap_or(true) && !self.reply.is_closed()
+    }
+}
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Snapshot {
     pub enabled: bool,
@@ -21,6 +45,9 @@ pub struct Feed {
     state: Mutex<State>,
     changed: watch::Sender<Snapshot>,
     retry: watch::Sender<u64>,
+    climate: watch::Sender<ClimateSnapshot>,
+    climate_requests: mpsc::Sender<ClimateRequest>,
+    climate_receiver: Mutex<Option<mpsc::Receiver<ClimateRequest>>>,
 }
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -39,6 +66,8 @@ impl Feed {
         };
         let (changed, _) = watch::channel(snapshot.clone());
         let (retry, _) = watch::channel(0);
+        let (climate, _) = watch::channel(ClimateSnapshot::default());
+        let (climate_requests, climate_receiver) = mpsc::channel(1);
         Arc::new(Self {
             state: Mutex::new(State {
                 snapshot,
@@ -48,7 +77,29 @@ impl Feed {
             }),
             changed,
             retry,
+            climate,
+            climate_requests,
+            climate_receiver: Mutex::new(Some(climate_receiver)),
         })
+    }
+    pub fn climate(&self) -> ClimateSnapshot { self.climate.borrow().clone() }
+    pub fn subscribe_climate(&self) -> watch::Receiver<ClimateSnapshot> { self.climate.subscribe() }
+    pub fn publish_climate(&self, authorized: bool, state: Option<ClimateState>, received_ms: Option<u64>) {
+        self.climate.send_if_modified(|s| {
+            if s.authorized == authorized && s.state == state && s.received_ms == received_ms { return false; }
+            s.authorized = authorized; s.state = state; s.received_ms = received_ms; true
+        });
+    }
+    pub fn reset_climate(&self) {
+        self.climate.send_modify(|s| *s = ClimateSnapshot { context: s.context.wrapping_add(1), ..Default::default() });
+    }
+    pub fn take_climate_requests(&self) -> Option<mpsc::Receiver<ClimateRequest>> { self.climate_receiver.lock().unwrap().take() }
+    pub fn request_climate(&self, context: u64, command: Option<ClimateCommand>, grant: watch::Receiver<Option<u64>>) -> Option<oneshot::Receiver<bool>> {
+        let snapshot = self.climate();
+        if snapshot.context != context || *grant.borrow() != Some(context) || grant.has_changed().unwrap_or(true) || !snapshot.authorized || (command.is_some() && snapshot.current().is_none()) { return None; }
+        let (reply, receiver) = oneshot::channel();
+        self.climate_requests.try_send(ClimateRequest { context, command, grant, reply }).ok()?;
+        Some(receiver)
     }
     pub fn snapshot(&self) -> Snapshot {
         self.state.lock().unwrap().snapshot.clone()

@@ -8,5 +8,3 @@ if [ -x /etc/init.d/cowplay ]; then
 fi
 rm -f /var/run/cowplay-upgrade-running
 # /etc/cowplay contains user identity, certificates and pairings. Preserve it.
-
-[ ! -x /etc/init.d/cowplay-restore ] || /etc/init.d/cowplay-restore disable

@@ -1,10 +1,12 @@
 import {h} from '../shared/dom';
 import {confirmAction} from '../shared/confirmation';
+import {teslaManagement} from '../shared/tesla-management';
 import '../phone/phone.css';
 import './manage.css';
 
 const root = document.getElementById('content')!;
 let secret = '';
+let tesla: ReturnType<typeof teslaManagement> | null = null;
 const feedback = h('p', {role: 'status', class: 'lead', id: 'feedback'});
 async function api(method: string, args: unknown = {}): Promise<Record<string, any>> {
   const r = await fetch(`/api/manage/${method}`, {method: 'POST', cache: 'no-store', credentials: 'omit', headers: {'Content-Type': 'application/json', Authorization: `Bearer ${secret}`}, body: JSON.stringify(args)});
@@ -23,6 +25,7 @@ function action(label: string, run: () => Promise<void>): HTMLButtonElement {
 }
 const field = (label: string, input: HTMLElement) => h('label', {class: 'manage-field'}, h('span', {}, label), input);
 function login(): void {
+  tesla?.dispose(); tesla = null;
   secret = '';
   const token = h('input', {type: 'password', autocomplete: 'off', required: true, minlength: 64, maxlength: 64, 'aria-label': '管理令牌'});
   const form = h('form', {}, field('管理令牌', token), h('button', {type: 'submit', class: 'primary'}, '进入管理'));
@@ -55,12 +58,16 @@ async function dashboard(): Promise<void> {
       feedback.textContent = 'HTTPS 证书已替换。';
     } finally { certificate.value = ''; key.value = ''; }
   });
+  tesla?.dispose(); tesla = teslaManagement(api);
   root.replaceChildren(h('h1', {}, 'CowPlay 管理'), h('p', {class: 'lead'}, `${status.version ?? '—'} · ${status.build ?? '—'}`), feedback,
-    h('nav', {class: 'manage-links'}, h('a', {href: '/car'}, '车机投屏'), h('a', {href: '/phone'}, '手机与屏幕'), action('退出管理', async () => { login(); })),
+    h('nav', {class: 'manage-links'}, h('a', {href: '/car'}, '车机投屏'), h('a', {href: '/phone'}, '手机与屏幕'), h('a', {href: '#tesla-management'}, 'Tesla 车辆'), action('退出管理', async () => { login(); })),
+    tesla.element,
     h('section', {}, h('h2', {}, '连接状态'), h('p', {}, status.verdict?.title ?? status.verdict ?? '状态未知'), h('p', {}, `访问地址：${status.network?.origin ?? '—'}`)),
     h('section', {}, h('h2', {}, '画面上限'), field('分辨率上限', resolution), h('p', {class: 'lead'}, '可填 1080p、2160p 或偶数宽×高，例如 1280x800。'), field('帧率上限', fps), field('自动降低帧率', downgrade), save),
     h('section', {}, h('h2', {}, '投屏访问'), h('p', {}, '新车机首次打开时输入投屏令牌。'), tokenValue, showToken),
     h('section', {}, h('h2', {}, 'HTTPS 证书'), h('p', {class: 'lead'}, status.network?.cert_days == null ? '有效期未知' : `证书剩余 ${status.network.cert_days} 天`), field('证书链 PEM', certificate), field('私钥 PEM', key), upload),
     h('p', {class: 'lead'}, '热点、路由、开机启动和升级由主机系统管理。手机控制台提供配对、重连、屏幕偏好与诊断日志。'));
+  tesla.start();
 }
+window.addEventListener('pagehide', () => { tesla?.dispose(); });
 login();

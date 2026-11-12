@@ -44,9 +44,9 @@ for mode in ['enabled', 'disabled', 'already_installed', 'different_version', 'w
             (root / 'etc/cowplay/updates/active').touch()
         if mode == 'no_cache':
             (cache / 'current').unlink()
-        manifest = dict(schema=1, repository='helloworlde/cowplay', platform='openwrt-apk', openwrt_releases=['25.12.6'], arch='aarch64_generic', version='0.3.14-r17', tag='v0.3.14-r17', packages=[])
+        manifest = dict(schema=1, repository='helloworlde/cowplay', platform='openwrt-apk', openwrt_releases=['25.12.6'], arch='aarch64_generic', version='0.0.1-r0', tag='v0.0.1', packages=[])
         for name, arch in [('cowplay', 'aarch64_generic'), ('luci-app-cowplay', 'noarch')]:
-            file = f'{name}-0.3.14-r17-{arch}.apk'
+            file = f'{name}-0.0.1-r0-{arch}.apk'
             data = name.encode()
             (slot / file).write_bytes(data)
             manifest['packages'].append(dict(name=name, arch=arch, file=file, sha256=hashlib.sha256(data).hexdigest()))
@@ -68,7 +68,7 @@ case "$1" in
 esac
 '''
         script(root / 'init-template', init_body)
-        installed = {'cowplay': '0.3.14-r17', 'luci-app-cowplay': '0.3.14-r17'} if mode == 'already_installed' else {'cowplay': '0.3.15-r0'} if mode == 'different_version' else {}
+        installed = {'cowplay': '0.0.1-r0', 'luci-app-cowplay': '0.0.1-r0'} if mode == 'already_installed' else {'cowplay': '0.3.15-r0'} if mode == 'different_version' else {}
         (root / 'installed.json').write_text(json.dumps(installed))
         script(binpath / 'jsonfilter', '''import json,re,sys
 args=sys.argv[1:]
@@ -98,7 +98,7 @@ if 'verify' in args:sys.exit(1 if mode=='apk_signature' else 0)
 if 'add' in args:
     if '--simulate' in args:sys.exit(1 if mode=='dependencies' else 0)
     with (root/'events').open('a') as f:f.write('install\\n')
-    (root/'installed.json').write_text(json.dumps({{'cowplay':'0.3.14-r17','luci-app-cowplay':'0.3.14-r17'}}))
+    (root/'installed.json').write_text(json.dumps({{'cowplay':'0.0.1-r0','luci-app-cowplay':'0.0.1-r0'}}))
     shutil.copyfile(root/'init-template',root/'etc/init.d/cowplay');os.chmod(root/'etc/init.d/cowplay',0o700)
     # Core post-install enables its default; restore must replace it with latest preference.
     (root/'etc/rc.d/S95cowplay').unlink(missing_ok=True)
@@ -124,8 +124,8 @@ sys.exit(1)
 for same_version in [True, False]:
     with tempfile.TemporaryDirectory(prefix='sysupgrade-guard-', dir=project / 'target') as raw:
         root=Path(raw);cache=root/'etc/cowplay/firmware-restore';slot=cache/('a'*32);slot.mkdir(parents=True)
-        (cache/'current').write_text('a'*32);(slot/'cowplay-release.json').write_text('{"version":"0.3.14-r17"}')
-        tools=root/'bin';tools.mkdir();script(tools/'jsonfilter',"printf '0.3.14-r17'\n");script(tools/'apk','exit '+('0' if same_version else '1')+'\n')
+        (cache/'current').write_text('a'*32);(slot/'cowplay-release.json').write_text('{"version":"0.0.1-r0"}')
+        tools=root/'bin';tools.mkdir();script(tools/'jsonfilter',"printf '0.0.1-r0'\n");script(tools/'apk','exit '+('0' if same_version else '1')+'\n')
         guard=(project/'packaging/cowplay.sysupgrade').read_text().replace('/etc/cowplay',str(root/'etc/cowplay')).replace('/var/run/cowplay-network',str(root/'var/run/cowplay-network')).replace('/etc/rc.d/S95cowplay',str(root/'etc/rc.d/S95cowplay'))
         actual=root/'guard.sh';actual.write_text('append() { :; }\n'+guard+'\ncowplay_preserve_guard "$1"\n');listing=root/'backup-list';listing.touch()
         subprocess.run(['/bin/sh',actual,listing],env=dict(os.environ,PATH=str(tools)+':'+os.environ['PATH']),check=True)

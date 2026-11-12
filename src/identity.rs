@@ -4,7 +4,8 @@ use std::os::unix::fs::PermissionsExt;
 use serde_json::Value;
 use zeroize::Zeroizing;
 
-pub(crate) fn select_pair(config: &Path, state: &Path, certificate: &str, private_key: &str) -> Result<(), String> {
+pub(crate) fn select_pair(config: &Path, state: &Path, certificate: &str, private_key: &str) -> Result<Vec<u8>, String> {
+    use der::Encode;
     fn decode(pem: &str) -> Result<Zeroizing<Vec<u8>>, String> {
         if pem.len() > 24576 { return Err("CarPlay 文件编码后超过限制".into()); }
         let (_, bytes) = der::pem::decode_vec(pem.as_bytes()).map_err(|_|"CarPlay 文件编码无效")?;
@@ -15,6 +16,7 @@ pub(crate) fn select_pair(config: &Path, state: &Path, certificate: &str, privat
     let key = decode(private_key)?;
     f50_core::mfi::ImportedIdentity::from_pkcs8_and_certificate(&key, &cert)
         .map_err(|_|"CarPlay 证书与私钥无效或不匹配；需要 P-256 PKCS8 DER 私钥及 X.509 DER / CMS P7B 证书")?;
+    let public = f50_core::mfi::public_certificate(&cert).map_err(|e|format!("{e:?}"))?.to_der().map_err(|e|e.to_string())?;
     let original = f50_server::settings::read(config.to_str().ok_or("配置路径无效")?,32768).map_err(|_|"无法读取当前配置")?;
     let mut value: Value = serde_json::from_slice(&original).map_err(|_|"当前配置无效")?;
     let receiver = value.get_mut("receiver").and_then(Value::as_object_mut).ok_or("配置缺少 receiver")?;
@@ -32,7 +34,7 @@ pub(crate) fn select_pair(config: &Path, state: &Path, certificate: &str, privat
     let _kept = dir.keep();
     std::fs::File::open(state).and_then(|f|f.sync_all()).map_err(|_|"同步 CarPlay 目录失败")?;
     f50_server::settings::write_private(config,&bytes).map_err(|_|"保存配置失败，请核对后重试")?;
-    Ok(())
+    Ok(public)
 }
 
 #[cfg(test)]

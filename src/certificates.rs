@@ -3,6 +3,55 @@ use crate::acme::{Issued, Result};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use std::path::{Path, PathBuf};
 
+pub(crate) fn public_chain(path: &Path) -> Result<Vec<Vec<u8>>> {
+    use der::Decode;
+    let pem = f50_server::settings::read(path.to_str().ok_or("证书路径无效")?,65536).map_err(|e|e.to_string())?;
+    let chain = CertificateDer::pem_slice_iter(&pem).map(|c| {
+        let c = c.map_err(|e|e.to_string())?;
+        x509_cert::Certificate::from_der(&c).map_err(|e|e.to_string())?;
+        Ok(c.to_vec())
+    }).collect::<Result<Vec<_>>>()?;
+    if chain.is_empty() { return Err("未找到公开 X.509 证书".into()); }
+    Ok(chain)
+}
+
+pub(crate) fn public_pem(chain: &[Vec<u8>]) -> Result<String> {
+    use der::{Decode, EncodePem};
+    chain.iter().map(|der| x509_cert::Certificate::from_der(der).map_err(|e|e.to_string())?
+        .to_pem(der::pem::LineEnding::LF).map_err(|e|e.to_string())).collect()
+}
+
+pub(crate) fn export_key(path: &Path, chain: &[Vec<u8>], carplay: bool) -> Result<Vec<u8>> {
+    let bytes = f50_server::settings::read(path.to_str().ok_or("私钥路径无效")?, 32768)
+        .map_err(|_| "无法读取当前私钥".to_owned())?;
+    if carplay {
+        let cert=chain.first().ok_or("当前没有 CarPlay 证书")?;
+        f50_core::mfi::ImportedIdentity::from_pkcs8_and_certificate(&bytes,cert)
+            .map_err(|_| "私钥与运行中的证书不匹配；请核对文件，未导出".to_owned())?;
+        return Ok(bytes.to_vec());
+    }
+    let key = PrivateKeyDer::from_pem_slice(&bytes).map_err(|_| "当前私钥格式无效".to_owned())?;
+    let certs = chain.iter().cloned().map(CertificateDer::from).collect();
+    rustls::sign::CertifiedKey::from_der(certs, key.clone_key(), &rustls::crypto::ring::default_provider())
+        .map_err(|_| "私钥与运行中的证书不匹配；请核对文件，未导出".to_owned())?;
+    let label = match &key { PrivateKeyDer::Pkcs1(_) => "RSA PRIVATE KEY", PrivateKeyDer::Sec1(_) => "EC PRIVATE KEY", _ => "PRIVATE KEY" };
+    der::pem::encode_string(label, der::pem::LineEnding::LF, key.secret_der()).map(String::into_bytes).map_err(|_| "私钥编码失败".into())
+}
+
+pub(crate) fn metadata(chain: &[Vec<u8>]) -> Result<serde_json::Value> {
+    use der::Decode;
+    use sha2::{Digest,Sha256};
+    let leaf=chain.first().ok_or("没有当前证书快照")?;
+    let cert=x509_cert::Certificate::from_der(leaf).map_err(|e|e.to_string())?;
+    let t=&cert.tbs_certificate;
+    let hex=|bytes:&[u8]|bytes.iter().map(|b|format!("{b:02X}")).collect::<Vec<_>>().join(":");
+    let before=t.validity.not_before.to_unix_duration().as_millis() as u64;
+    let after=t.validity.not_after.to_unix_duration().as_millis() as u64;
+    let now=f50_server::diag::now_ms();
+    let names=t.get::<x509_cert::ext::pkix::SubjectAltName>().ok().flatten().map(|(_,san)|san.0.into_iter().filter_map(|name|match name {x509_cert::ext::pkix::name::GeneralName::DnsName(n)=>Some(n.to_string()),_=>None}).collect::<Vec<_>>()).unwrap_or_default();
+    Ok(serde_json::json!({"subject":t.subject.to_string(),"issuer":t.issuer.to_string(),"serial":hex(t.serial_number.as_bytes()),"sha256":hex(&Sha256::digest(leaf)),"dns_names":names,"not_before_ms":before,"not_after_ms":after,"date_valid":now>=before&&now<after,"chain_count":chain.len()}))
+}
+
 fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     f50_server::settings::write_private(path, data).map_err(|e| e.to_string())
 }
@@ -57,6 +106,49 @@ pub async fn activate(config: &Path, cert: &Path, key: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn public_exports_exclude_keys_and_saved_identity_does_not_replace_runtime_snapshot() {
+        let (manager,_bus,hub,state)=crate::bluetooth::recovery_tests::admin_fixture().await;
+        let tls=pair();
+        let cert=state.path().join("mixed.pem");let key=state.path().join("key.pem");
+        std::fs::write(&cert,format!("{}{}",tls.chain_pem,tls.key_pem)).unwrap();
+        std::fs::write(&key,&tls.key_pem).unwrap();
+        let config=state.path().join("config.json");std::fs::write(&config,br#"{"receiver":{}}"#).unwrap();
+        let a=crate::admin::Admin::new(manager,hub,"https://cowplay.test".into(),state.path().join("cowplay.uci"),config,state.path().to_owned(),cert.to_string_lossy().into_owned(),key.to_string_lossy().into_owned(),"127.0.0.1:8080".parse().unwrap(),"127.0.0.1:7000".parse().unwrap(),None,(800,480)).unwrap();
+        let active=rcgen::generate_simple_self_signed(vec!["synthetic-active.test".into()]).unwrap();
+        *a.public_mfi.lock().unwrap()=Some(vec![active.cert.der().to_vec()]);
+        let active_key=state.path().join("active.pk8");
+        std::fs::write(&active_key,active.signing_key.serialize_der()).unwrap();
+        *a.running_mfi_key.lock().unwrap()=Some(active_key.clone());
+        let pending=rcgen::generate_simple_self_signed(vec!["synthetic-pending.test".into()]).unwrap();
+        crate::ctl::dispatch(&a,"mfi_upload",&serde_json::json!({"certificate":pending.cert.pem(),"private_key":pending.signing_key.serialize_pem()})).await.unwrap();
+        let info=crate::ctl::dispatch(&a,"cert",&serde_json::json!({})).await.unwrap();
+        assert_ne!(info["carplay"]["sha256"],info["pending_carplay"]["sha256"]);
+        assert_eq!(info["pending_carplay"]["source"],"saved_pending_restart");
+        for (kind,expected) in [("tls",tls.key_pem.as_bytes()),("carplay",active.signing_key.serialize_der().as_slice())] {
+            let exported=crate::ctl::dispatch(&a,"key_export",&serde_json::json!({"kind":kind})).await.unwrap();
+            let lines=exported["data"].as_str().unwrap().as_bytes().chunks(64).map(|s|std::str::from_utf8(s).unwrap()).collect::<Vec<_>>().join("\n");
+            let pem=format!("-----BEGIN PRIVATE KEY EXPORT-----\n{lines}\n-----END PRIVATE KEY EXPORT-----\n");
+            assert_eq!(der::pem::decode_vec(pem.as_bytes()).unwrap().1,expected);
+        }
+        std::fs::write(&active_key,pending.signing_key.serialize_der()).unwrap();
+        assert!(crate::ctl::dispatch(&a,"key_export",&serde_json::json!({"kind":"carplay"})).await.unwrap_err().contains("不匹配"));
+        assert!(crate::ctl::dispatch(&a,"key_export",&serde_json::json!({"kind":"/etc/private-key"})).await.is_err());
+        for kind in ["tls","carplay"] {
+            let export=crate::ctl::dispatch(&a,"certificate_export",&serde_json::json!({"kind":kind})).await.unwrap();
+            let pem=export["pem"].as_str().unwrap();
+            assert!(!pem.contains("PRIVATE KEY"));
+            assert_eq!(pem.matches("BEGIN CERTIFICATE").count(),1);
+            if kind=="carplay" { assert_eq!(pem,active.cert.pem()); }
+        }
+        let before=crate::ctl::dispatch(&a,"certificate_export",&serde_json::json!({"kind":"tls"})).await.unwrap();
+        std::fs::write(&cert,pair().chain_pem).unwrap();
+        let after=crate::ctl::dispatch(&a,"certificate_export",&serde_json::json!({"kind":"tls"})).await.unwrap();
+        assert_eq!(before,after,"current export uses the loaded snapshot, not a later file replacement");
+        assert!(crate::ctl::dispatch(&a,"certificate_export",&serde_json::json!({"kind":"/etc/private-key"})).await.is_err());
+        std::fs::write(&key,pair().key_pem).unwrap();
+        assert!(crate::ctl::dispatch(&a,"key_export",&serde_json::json!({"kind":"tls"})).await.unwrap_err().contains("不匹配"));
+    }
     fn pair() -> Issued {
         let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec!["cowplay.test".into()]).unwrap();
         Issued { chain_pem: cert.pem(), key_pem: signing_key.serialize_pem() }

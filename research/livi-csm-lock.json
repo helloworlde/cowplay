@@ -1,0 +1,11 @@
+{
+  "name": "LIVI iAP2 CSM synthetic vectors",
+  "url": "https://github.com/f-io/LIVI",
+  "commit": "870d26441e073cdb802c427c5ae8833dba694951",
+  "license": "GPL-3.0-or-later",
+  "additional_terms": "Retain attribution in legal notices and documentation; see crates/server/src/ultra/livi/NOTICE",
+  "source": "native/crates/iap2-csm/tests/vectors.txt",
+  "sha256": "dd7663386d15255ec555155237a095679c064c204264fcbc4af9ce422127e82a",
+  "destination": "crates/core/tests/data/livi-csm-vectors.txt",
+  "scope": "Unmodified synthetic vectors for CSM framing, authentication certificate, wireless handoff and EV range cross-checks; no upstream runtime or dependency imported"
+}

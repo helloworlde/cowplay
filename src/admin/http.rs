@@ -1,6 +1,8 @@
 use super::{Admin, stamp};
 use axum::{Router, extract::{Query, State}, http::{HeaderMap, StatusCode, header}, response::{IntoResponse, Response}, routing::get};
-use f50_server::diag::{self, LogQuery, diag};
+use f50_server::diag::{LogQuery, diag};
+#[cfg(test)]
+use f50_server::diag;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -39,16 +41,38 @@ async fn logs(State(a): State<Arc<Admin>>, h: HeaderMap, Query(q): Query<LogQuer
     guard!(a, h, false);
     json_ok(serde_json::to_value(diag().logs(&q)).unwrap_or(Value::Null))
 }
-async fn logs_download(State(a): State<Arc<Admin>>, h: HeaderMap, Query(mut q): Query<LogQuery>) -> Response {
+async fn logs_download(State(a): State<Arc<Admin>>, h: HeaderMap) -> Response {
     guard!(a, h, false);
-    q.limit = Some(5000);
-    let page = diag().logs(&q);
-    let current: String = page.entries.iter().rev().map(diag::format_line).collect();
-    let mut stored = a.stored_logs().await;
-    let tail = stored.get_mut("tail").map(Value::take).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
-    let metadata = json!({"storage":diag().storage_status(),"stored_export":stored,"memory":{"evicted":page.evicted,"oldest_seq":page.oldest_seq,"last_seq":page.last_seq,"truncated":page.matched>page.entries.len()||page.evicted>0}});
-    let text = diag::mask_macs(&format!("# CowPlay log export {}\n# {}\n# 持久日志尾部\n{}\n# 当前进程内存尾部（可能与上段重复）\n{}", diag::now_ms(), metadata, tail, current));
-    attachment(&format!("cowplay-{}.log", stamp()), "text/plain; charset=utf-8", text.into_bytes())
+    let body=serde_json::to_vec_pretty(&a.bundle().await).unwrap_or_default();
+    attachment(&format!("cowplay-support-{}.json",stamp()),"application/json",body)
+}
+
+#[cfg(test)]
+fn memory_log_supplement(entries: &[diag::Entry], tail: &str) -> (String, usize) {
+    let persistent: std::collections::HashSet<_> = tail.lines().collect();
+    let mut current = String::new();
+    let mut duplicates = 0;
+    for e in entries.iter().rev() {
+        let line = diag::mask_macs(&diag::format_line(e));
+        if persistent.contains(line.trim_end_matches('\n')) { duplicates += 1; } else { current.push_str(&line); }
+    }
+    (current,duplicates)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn overlap_is_not_a_second_failure_and_independent_events_survive() {
+        let mut entry = diag::Entry {service:"synthetic-service".into(),seq:1,ts_ms:1000,level:diag::Level::Warn,module:"test",msg:"phone 00:11:22:33:44:55 timeout".into()};
+        let persistent=diag::mask_macs(&diag::format_line(&entry));
+        let (extra,duplicates)=memory_log_supplement(&[entry.clone()],&persistent);
+        assert!(extra.is_empty()); assert_eq!(duplicates,1);
+        entry.seq=2;
+        let (extra,duplicates)=memory_log_supplement(&[entry],&persistent);
+        assert!(extra.contains("seq=2")); assert_eq!(duplicates,0);
+        assert!(!extra.contains("33:44"));
+    }
 }
 async fn system(State(a): State<Arc<Admin>>, h: HeaderMap) -> Response {
     guard!(a, h, false);

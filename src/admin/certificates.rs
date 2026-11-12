@@ -47,6 +47,7 @@ impl Admin {
     /// restore it on activation failure, and never report stale in-memory TLS paths.
     pub(crate) async fn activate_certificate_pair(&self, cert: &Path, key: &Path, source: &str) -> Result<(), String> {
         if !["acme", "upload", "self", "http"].contains(&source) { return Err("证书来源无效".into()); }
+        let public_tls = crate::certificates::public_chain(cert)?;
         let old = self.tls.lock().unwrap().clone();
         let old_source = self.policy().cert_source;
         self.update_policy(|p|p.cert_source=source.to_owned())?;
@@ -57,6 +58,7 @@ impl Admin {
             };
         }
         *self.tls.lock().unwrap() = (cert.to_string_lossy().into_owned(), key.to_string_lossy().into_owned());
+        *self.public_tls.lock().unwrap() = Some(public_tls);
         f50_server::settings::write_private(&self.state_dir.join("tls-previous.json"), &serde_json::to_vec(&json!({"cert":old.0,"key":old.1,"source":old_source})).map_err(|e|e.to_string())?)
             .map_err(|e|format!("新证书和续期模式已启用，但回滚记录保存失败：{e}"))?;
         Ok(())

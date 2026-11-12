@@ -1,2 +1,2 @@
-export const BUILD_ID = "cowplay-0.3.14-r17-github-updates-20261110";
-export const PROTOCOL = 7;
+export const BUILD_ID = "cowplay-0.0.1-20261112";
+export const PROTOCOL = 10;

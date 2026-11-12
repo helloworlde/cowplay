@@ -4,5 +4,3 @@
 [ -z "${IPKG_INSTROOT:-}" ] || exit 0
 set -eu
 /etc/init.d/cowplay enable
-
-[ ! -x /etc/init.d/cowplay-restore ] || /etc/init.d/cowplay-restore enable

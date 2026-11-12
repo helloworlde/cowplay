@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 pub type RuntimeResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[cfg(feature = "tesla")]
 pub mod tesla_ble;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +229,7 @@ pub use platform::f50 as board;
 pub mod import;
 pub mod rfcomm;
 pub mod service;
+mod receiver_name;
 pub mod web;
 
 #[cfg(test)]

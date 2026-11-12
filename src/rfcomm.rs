@@ -153,7 +153,7 @@ async fn session(
         Ok(()) => {
             d.event("info", "bt", "蓝牙 RFCOMM 通道已关闭");
             if !handed_off && d.link().bluetooth != "fail" {
-                d.link_fail("bluetooth", "蓝牙通道在认证完成前关闭", "让 iPhone 靠近 F50 并保持解锁，点“连接 iPhone”重试。");
+                d.link_fail("bluetooth", "蓝牙通道在认证完成前关闭", "让 iPhone 靠近接收端并保持解锁，点“连接 iPhone”重试。");
             }
         }
         Err(e) => {
@@ -216,7 +216,7 @@ async fn drive(
                     if !hub.phones.handoff(selection,device) {break;}
                     hub.open_pair_setup();
                     d.link_step("bluetooth", "ok", "已认证，已把热点信息交给 iPhone");
-                    d.link_step("wifi", "active", "等待 iPhone 加入 F50 热点");
+                    d.link_step("wifi", "active", "等待 iPhone 加入 CarPlay 热点");
                 }
                 "ACCESSORY_AUTH_FAILED" => d.link_fail("bluetooth", "iAP2 配件认证失败", "检查自检中的“配件身份”；导出诊断包以便排查。"),
                 _ => {}

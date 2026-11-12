@@ -124,3 +124,96 @@ fn old_or_unknown_tpms_measurement_time_is_not_relabelled_real_time() {
         );
     }
 }
+
+#[test]
+fn climate_queries_and_whitelisted_commands_match_pinned_official_fields() {
+    assert_eq!(climate::query(), vec![0x12, 4, 0x0a, 2, 0x1a, 0]);
+    assert_eq!(
+        ClimateCommand::Power { on: true }.payload().unwrap(),
+        vec![0x12, 4, 0x52, 2, 8, 1]
+    );
+    assert_eq!(
+        ClimateCommand::Power { on: false }.payload().unwrap(),
+        vec![0x12, 2, 0x52, 0]
+    );
+    assert_eq!(
+        ClimateCommand::SetTemperature {
+            driver_celsius: 21.5,
+            passenger_celsius: 22.0
+        }
+        .payload()
+        .unwrap(),
+        session::tests::hex("1210720e2a021a00350000ac413d0000b041")
+    );
+    for temperature in [f32::NAN, f32::INFINITY, -1.0, 50.1] {
+        for (driver_celsius, passenger_celsius) in [(temperature, 21.0), (21.0, temperature)] {
+            assert_eq!(
+                ClimateCommand::SetTemperature {
+                    driver_celsius,
+                    passenger_celsius
+                }
+                .payload(),
+                Err(Error::Malformed)
+            );
+        }
+    }
+}
+
+#[test]
+fn climate_presence_zero_celsius_limits_and_source_time_are_preserved() {
+    let response = |state: &[u8]| {
+        let mut response = proto::nested(1, &[]);
+        response.extend(proto::nested(2, &proto::nested(4, state)));
+        response
+    };
+    assert_eq!(
+        climate::decode(&response(&[])).unwrap(),
+        ClimateState::default()
+    );
+    let mut fields = Vec::new();
+    for (field, temperature) in [
+        (101, 0.0f32),
+        (102, -3.5),
+        (103, 21.5),
+        (104, 22.0),
+        (111, 15.0),
+        (112, 28.0),
+    ] {
+        proto::fixed(field, temperature.to_bits(), &mut fields);
+    }
+    proto::int(110, 0, &mut fields);
+    let mut sampled = Vec::new();
+    proto::int(1, 123, &mut sampled);
+    proto::int(2, 500_000_000, &mut sampled);
+    proto::bytes(33, &sampled, &mut fields);
+    let state = climate::decode(&response(&fields)).unwrap();
+    assert_eq!(
+        state,
+        ClimateState {
+            hvac_on: Some(false),
+            inside_temp_celsius: Some(0.0),
+            outside_temp_celsius: Some(-3.5),
+            driver_temp_celsius: Some(21.5),
+            passenger_temp_celsius: Some(22.0),
+            min_temp_celsius: Some(15.0),
+            max_temp_celsius: Some(28.0),
+            sampled_ms: Some(123_500),
+        }
+    );
+    for temperature in [f32::NAN, f32::INFINITY] {
+        let mut fields = Vec::new();
+        proto::fixed(101, temperature.to_bits(), &mut fields);
+        assert!(climate::decode(&response(&fields))
+            .unwrap()
+            .inside_temp_celsius
+            .is_none());
+    }
+    assert_eq!(
+        climate::decode(&proto::nested(1, &[8, 1])),
+        Err(Error::Rejected)
+    );
+    assert_eq!(
+        climate::decode(&proto::nested(1, &[])),
+        Err(Error::Malformed)
+    );
+}

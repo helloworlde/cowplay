@@ -42,26 +42,38 @@ var metricSources = {
     '画面': '浏览器绘制与解码上报；停住次数统计最近 10 分钟',
     'F50': '设备 CPU 与温度采样'
 };
+var wifiReasons = {available:'已取得当前手机无线指标。',partial:'部分无线指标可用；驱动未提供的项目保持未知。',driver_unavailable:'当前无线驱动未提供此手机的信号、速率和重传指标，无法测量。',query_failed:'无线驱动查询失败，无法取得当前手机的采样。',disconnected:'当前没有已连接的 iPhone。',stale:'当前手机的无线采样已过期或连接已变化。',unidentified:'尚未识别当前 iPhone 对应的无线客户端。',station_missing:'当前 iPhone 不在所选无线接口的客户端列表中。',no_interface:'尚未找到与 CarPlay 热点匹配的无线接口。'};
+function certificateRows(c) {
+    if (!c) return [note('当前核心未提供运行中公开证书快照，请核对核心与 LuCI 版本。')];
+    if (c.error) return [note('公开证书读取失败：' + c.error)];
+    var date = function(ms) { return Number.isFinite(ms) ? new Date(ms).toLocaleString() : '未知'; };
+    return [row('主体', c.subject || '未知'), row('签发者', c.issuer || '未知'), row('生效时间', date(c.not_before_ms)), row('截止时间', date(c.not_after_ms)), row('证书链数量', c.chain_count == null ? '未知' : String(c.chain_count))];
+}
+function screenReport(stats) { return stats.car || stats.car_last_report || {}; }
+function screenRtt(stats) { var car=screenReport(stats); return Number.isFinite(car.rtt_ms) ? car.rtt_ms : car.ping && Number.isFinite(car.ping.rtt_ms) ? car.ping.rtt_ms : null; }
+function rttSource(stats) { var car=screenReport(stats); return !Number.isFinite(car.rtt_ms) && car.ping && Number.isFinite(car.ping.rtt_ms) && Number.isFinite(car.ping.age_ms) && Number.isFinite(stats.car_sample_age_ms) ? '最近探测 · ' + Math.round((car.ping.age_ms + stats.car_sample_age_ms)/1000) + ' 秒前' : reportAge(stats); }
+function reportAge(stats) { return Number.isFinite(stats.car_sample_age_ms) ? (stats.car_sample_age_ms < 5000 ? '实时上报' : '上次上报 · ' + Math.round(stats.car_sample_age_ms / 1000) + ' 秒前') : '尚无屏幕上报'; }
 function measurements(checks, stats) {
     stats = stats || {};
-    var wifiReason = {driver_unavailable: '当前无线驱动未提供此手机的信号、速率和重传指标，无法测量。', query_failed: '无线驱动查询失败，无法取得当前手机的采样。', disconnected: '当前没有已连接的 iPhone。', stale: '当前手机的无线采样已过期或连接已变化。', unidentified: '尚未识别当前 iPhone 对应的无线客户端。', station_missing: '当前 iPhone 不在所选无线接口的客户端列表中。', no_interface: '尚未找到用于 CarPlay 的无线接口。'}[(stats.phone || {}).wifi_status] || '没有可关联到当前 iPhone 的新鲜无线采样。';
-    var car = stats.car || {}, background = car.visible === false;
-    var rawCar = {'延迟': car.rtt_ms, '抖动': car.jitter_ms, '丢包': car.loss_pct};
-    var groups = [];
-    checks.forEach(function(c) { if (groups.indexOf(c.group) < 0) groups.push(c.group); });
-    return E('div', {class: 'cw-measurements'}, groups.map(function(g) {
-        return E('section', {class: 'cw-panel'}, [E('h4', {}, g), note(metricSources[g] || '服务采样'), note(g === '车机 ⟷ F50' && background ? '投屏页在后台；显示最新原始上报，读数可能受浏览器后台节流影响。' : g === '画面' && !((stats.server || {}).fps_in > 0) ? '当前没有新视频帧；静止画面时即时帧率与解码耗时可能没有新值。' : checks.filter(function(c) { return c.group === g && c.known; }).length ? '' : g === '车机 ⟷ F50' ? '没有当前屏幕的有效上报：可能未连接、处于后台或上报已过期。' : g === 'F50 ⟷ iPhone' ? wifiReason : g === '画面' ? '等待动态画面和浏览器上报；静止画面不能据此判断流畅度。' : '尚未取得设备采样。'), E('dl', {class: 'cw-samples'}, checks.filter(function(c) { return c.group === g; }).map(function(c) {
-            var raw = background && c.group === '车机 ⟷ F50' ? rawCar[c.name] : null;
-            var reading = c.known && c.value != null && Number.isFinite(c.value) ? c.text : Number.isFinite(raw) ? val(raw, c.name === '丢包' ? ' %' : ' ms', c.name === '丢包' ? 1 : 0) : '—';
-            return E('div', {class: 'cw-sample'}, [E('dt', {}, c.name === '延迟' ? '往返时间 RTT' : c.name === '停住' ? '停住次数（10 分钟）' : c.name), E('dd', {class: 'cw-reading'}, reading)]);
-        }))]);
+    var car = screenReport(stats), raw = {'延迟':screenRtt(stats),'抖动':car.jitter_ms,'丢包':car.loss_pct,'帧率':car.fps,'解码':car.decode_ms};
+    checks = checks.map(function(c) { return Object.assign({}, c, {group: ({'车机 ⟷ F50':'车机 ⟷ 接收端','F50 ⟷ iPhone':'接收端 ⟷ iPhone','F50':'接收端'})[c.group] || c.group}); })
+        .filter(function(c) { return c.group !== '接收端 ⟷ iPhone' || c.known; });
+    var groups = Array.from(new Set(checks.map(function(c) { return c.group; })));
+    return E('div', {class:'cw-measurements'}, groups.map(function(g) {
+        var browser = g === '车机 ⟷ 接收端' || g === '画面';
+        return E('section', {class:'cw-panel'}, [E('h4',{},g), browser ? note(reportAge(stats) + (car.visible === false ? ' · 投屏页在后台' : '')) : null,
+            E('dl',{class:'cw-samples'},checks.filter(function(c) {return c.group === g;}).map(function(c) {
+                var useRaw = browser && Number.isFinite(stats.car_sample_age_ms) && stats.car_sample_age_ms >= 0 && Number.isFinite(raw[c.name]) && (car.visible === false || !stats.car || c.name === '延迟' && !Number.isFinite(car.rtt_ms) && Number.isFinite(screenRtt(stats)) || c.group === '画面' && car.width > 0 && car.height > 0 && car.decoded > 0);
+                var value = c.known && Number.isFinite(c.value) ? c.text : useRaw ? val(raw[c.name],c.name === '丢包' ? ' %' : c.name === '帧率' ? ' fps' : ' ms',c.name === '帧率' || c.name === '解码' || c.name === '丢包' ? 1 : 0) : '—';
+                return E('div',{class:'cw-sample'},[E('dt',{},c.name === '延迟' ? '往返时间 RTT' : c.name === '停住' ? '停住次数（10 分钟）' : c.name),E('dd',{class:'cw-reading'},value + (c.name === '延迟' && !Number.isFinite(car.rtt_ms) && Number.isFinite(screenRtt(stats)) ? ' · ' + rttSource(stats) : ''))]);
+            }))].filter(Boolean));
     }));
 }
 return view.extend({
     load: function() {
         var route = location.hash.slice(1); if (route === 'diag') route = 'checks';
-        this.maps = []; this.pendingActions = new Map(); this.actionEpoch = 0; this.formEpoch = 0; this.page = tabs.some(function(t) { return t[0] === route; }) ? route : 'overview'; this.diagTab = diagnosticTabs.some(function(t) { return t[0] === route; }) ? route : 'checks'; if (diagnosticTabs.some(function(t) { return t[0] === route; })) this.page = 'diag'; this.sampling = false; this.lastSample = null; this.diagEpoch = 0; this.logLevel = ''; this.logModule = ''; this.timelineScope = 'current'; this.disableDdnsPending = false; this.editState = 'clean';
-        return Promise.all([uci.load('cowplay'), uci.load('wireless'), uci.load('network'), cp.call('status').catch(function(e) { return {error: e.message}; }), cp.call('phones').catch(function(e) { return {error: e.message}; }), cp.call('screens').catch(function(e) { return {error: e.message}; }), cp.call('cert').catch(function(e) { return {error: e.message}; }), cp.call('proc').catch(function(e) { return {error: e.message}; }), cp.call('service_info').catch(function(e) { return {error: e.message}; })]);
+        this.maps = []; this.pendingActions = new Map(); this.actionEpoch = 0; this.formEpoch = 0; this.page = tabs.some(function(t) { return t[0] === route; }) ? route : 'overview'; this.diagTab = diagnosticTabs.some(function(t) { return t[0] === route; }) ? route : 'checks'; if (diagnosticTabs.some(function(t) { return t[0] === route; })) this.page = 'diag'; this.sampling = true; this.lastSample = null; this.diagEpoch = 0; this.logLevel = ''; this.logModule = ''; this.timelineScope = 'current'; this.disableDdnsPending = false; this.editState = 'clean';
+        return Promise.all([uci.load('cowplay'), cp.call('config_export').catch(function(e) { return {error: e.message}; }), cp.call('status').catch(function(e) { return {error: e.message}; }), cp.call('phones').catch(function(e) { return {error: e.message}; })]);
     },
     actionUI: function() { return JSON.stringify([this.actionEpoch, location.hash, this.page, this.diagTab]); },
     actionContext: function() { return JSON.stringify([this.actionUI(), this.data.pid, this.data.build, this.data.context]); },
@@ -108,6 +120,22 @@ return view.extend({
         b.syncPending();
         return b;
     },
+    privateKeyDownload: function(kind, label) {
+        var self = this;
+        return E('button',{type:'button',class:'btn cbi-button cbi-button-neutral',disabled:!L.hasViewPermission() || null,click:async function() {
+            var context = self.actionContext(), button = this;
+            var current = function() { return L.hasViewPermission() && context === self.actionContext(); };
+            if (button.disabled || !current()) return;
+            button.disabled = true;
+            try {
+                if (!await confirmation.ask({key:'private-key-'+kind,title:label+'？',description:'将下载当前使用的私钥，请妥善保存。',confirm:'下载私钥',current:current}) || !current()) return;
+                // LuCI's HttpOnly cookie is scoped to /cgi-bin/luci, not this sibling CGI.
+                var form = E('form',{method:'post',action:'/cgi-bin/cowplay-key-download',target:'_blank',rel:'noopener'},[
+                    E('input',{type:'hidden',name:'kind',value:kind}), E('input',{type:'hidden',name:'sessionid',value:L.env.sessionid})]);
+                document.body.appendChild(form);form.submit();form.remove();
+            } finally { button.disabled = !L.hasViewPermission(); }
+        }},label);
+    },
     map: function(name) { var m = new form.Map(name || 'cowplay'); this.maps.push(m); return m; },
     formSection: function(m, id, type, title) {
         var s = m.section(form.TypedSection, type, title); s.anonymous = true; s.addremove = false; s.cfgsections = function() { return [id]; }; return s;
@@ -140,7 +168,7 @@ return view.extend({
         var canonical = Object.keys(aliases).find(function(k) { return aliases[k] === saved; }) || saved;
         if (!choices.some(function(v) { return v[0] === canonical; })) choices.push([canonical, canonical + '（原配置）']);
         var size = this.option(s, 'list', 'max_res', '请求分辨率上限', choices, '这是接收端请求上限；实际画面由 iPhone 接受后返回。');
-        size.readonly = !caps;
+        size.readonly = caps ? null : true;
         size.cfgvalue = function(id) { var value = uci.get("cowplay", id, "max_res") || "1080p"; return Object.keys(aliases).find(function(k) { return aliases[k] === value; }) || value; };
         var fps = this.option(s, 'list', 'max_fps', '请求帧率上限', [['30', '30 帧'], ['60', '60 帧']], '静止画面可能低于此值。');
         var savedFps = uci.get('cowplay', 'main', 'max_fps') || '60';
@@ -149,7 +177,7 @@ return view.extend({
             fps.rmempty = true; fps.remove = function() {}; // An untouched legacy setting must survive unrelated saves.
         }
         fps.cfgvalue = function(id) { var v = uci.get('cowplay', id, 'max_fps') || '60'; return v === '30' || v === '60' ? v : ''; };
-        fps.readonly = !caps;
+        fps.readonly = caps ? null : true;
         return m.render();
     },
     devicesForm: function() {
@@ -182,22 +210,20 @@ return view.extend({
         return m.render();
     },
     wirelessInfo: function() {
-        var net = this.data.network || {}, iface = uci.get('cowplay', 'main', 'wifi_iface');
-        var aps = uci.sections('wireless', 'wifi-iface').filter(function(w) { return w.mode === 'ap' && (iface ? w['.name'] === iface || w.ifname === iface : w.ssid === net.ssid); });
-        var ap = aps.length === 1 ? aps[0] : null, channel = ap && uci.get('wireless', ap.device, 'channel');
-        var network = ap && ap.network, networks = Array.isArray(network) ? network : String(network || '').split(' ');
-        var addresses = networks.filter(Boolean).map(function(n) { var ip = uci.get('network', n, 'ipaddr'), mask = uci.get('network', n, 'netmask'); return n + ' · ' + (Array.isArray(ip) ? ip.join(', ') : ip || '地址未知') + (mask ? ' / ' + mask : ''); });
+        var net = this.networkInfo || {};
+        var addresses = (net.interfaces || []).map(function(n) { return n.name + ' · ' + ((n.addresses || []).join(', ') || '地址未知') + (n.netmask ? ' / ' + n.netmask : ''); });
         return section('无线与局域网', card([
-            row('SSID', ap ? ap.ssid || '—' : net.ssid || '无法唯一定位热点'),
-            row('信道 / 频宽', ap ? 'CH ' + (channel || '未知') + ' · ' + (uci.get('wireless', ap.device, 'htmode') || '未知') : '—'),
+            row('SSID', net.ssid || '—'),
+            row('信道 / 频宽', net.ssid ? 'CH ' + (net.channel || '未知') + ' · ' + (net.htmode || '未知') : '—'),
             row('接口 / 网段', addresses.join('；') || '请在网络 › 接口中核对'),
+            net.error ? note('无线配置读取失败：' + net.error) : null,
             E('div', {class: 'cw-actions'}, [E('a', {href: L.url('admin/network/wireless'), class: 'btn cbi-button cbi-button-neutral'}, 'Wi-Fi 设置 ↗'), E('a', {href: L.url('admin/network/network'), class: 'btn cbi-button cbi-button-neutral'}, '局域网设置 ↗')]),
             note('修改 Wi-Fi 会中断连接，之后需重启 CowPlay。'),
             E('details', {'data-network-help': ''}, [E('summary', {}, '车机网络说明'),
                 note('中国大陆 Model 3 / Y 手册列出 5 GHz 149–165；165 需核对带宽。以本车手册为准。'),
                 note('域名须解析到 F50 可达地址；注意与蜂窝 WAN、VPN 网段冲突。车机访问限制以实车为准。'),
                 E('div', {class: 'cw-actions'}, [E('a', {href: 'https://www.tesla.cn/ownersmanual/model3/zh_cn/GUID-1FE9620C-3D7F-4FD3-BBD9-28DD342AC150.html', target: '_blank', rel: 'noopener'}, 'Tesla Wi-Fi 手册 ↗'), E('a', {href: 'https://www.iana.org/assignments/iana-ipv4-special-registry/', target: '_blank', rel: 'noopener'}, '网段说明 ↗')])])
-        ]));
+        ].filter(Boolean)));
     },
     ddnsInfo: function() {
         var self = this, configured = uci.get('cowplay', 'main', 'ddns_enabled') === '1' && uci.get('cowplay', 'main', 'ddns_mode') !== 'luci', active = ((this.data.network || {}).ddns || {}).enabled === true;
@@ -214,29 +240,44 @@ return view.extend({
     },
     select: function(route) {
         if (this.importRunning) return;
-        this.actionEpoch++; confirmation.cancel();
+        if (this.page === 'diag' && this.diagTab === 'checks' && route !== 'checks') this.stopSampling();
+        this.actionEpoch++; this.diagEpoch++; this.diagPending = null; confirmation.cancel();
         if (this.hideManagementToken) this.hideManagementToken();
         var diagnostic = diagnosticTabs.some(function(t) { return t[0] === route; }), page = diagnostic ? 'diag' : route;
         if (diagnostic) this.diagTab = route;
         this.page = page; history.replaceState(null, '', '#' + route);
+        if (diagnostic) { this.diagBody.replaceChildren(note('正在读取此视图…')); this.loadDiag(); }
         this.root.querySelectorAll('[data-page]').forEach(function(p) { p.hidden = p.dataset.page !== page; });
         this.root.querySelectorAll('[role=tab][data-target]').forEach(function(b) { var on = b.dataset.target === route; b.setAttribute('aria-selected', String(on)); b.parentElement.className = on ? 'cbi-tab' : 'cbi-tab-disabled'; });
         this.intro.textContent = diagnostic ? '' : subtitles[page];
         this.updateFooter();
-        if (page === 'diag') this.loadDiag();
+        if (page === 'network') this.networkInfoLoaded = false;
+        return this.refresh();
     },
     refresh: function() {
-        var self = this;
-        return Promise.all([cp.call('status'), cp.call('phones'), cp.call('screens'), cp.call('service_info').catch(function(e) { return {error: e.message}; }), this.page === 'network' ? cp.call('cert').catch(function(e) { return {error: e.message}; }) : Promise.resolve(null)]).then(function(r) {
-            self.data = r[0]; self.phones = r[1]; self.screens = r[2]; self.serviceData = r[3]; if (r[4]) self.certData = r[4]; self.update();
-        }).catch(function(e) {
-            self.data = {error: e.message}; self.phones = {}; self.screens = {};
+        var self = this, route = this.page + ':' + this.diagTab, epoch = this.actionEpoch;
+        if (this.refreshPending && this.refreshPending.route === route && this.refreshPending.epoch === epoch) return this.refreshPending.promise;
+        var methods = ['status'];
+        if (this.page === 'devices') methods.push('phones', 'screens');
+        if (this.page === 'network') { methods.push('cert'); if (!this.networkInfoLoaded) methods.push('network_info'); }
+        if (this.page === 'system') { methods.push('service_info'); if (!this.procLoaded) methods.push('proc'); }
+        var pending = Promise.all(methods.map(function(method) { return cp.call(method).catch(function(e) { return {error: e.message}; }); })).then(function(results) {
+            if (route !== self.page + ':' + self.diagTab || epoch !== self.actionEpoch) return;
+            methods.forEach(function(method, i) {
+                if (method === 'status') self.data = results[i];
+                else if (method === 'phones' || method === 'screens') self[method] = results[i];
+                else if (method === 'network_info') { self.networkInfo = results[i]; self.networkInfoLoaded = !results[i].error; self.wirelessPanel.replaceChildren(self.wirelessInfo()); }
+                else if (method === 'proc') { self.procData = results[i]; self.procLoaded = !results[i].error; }
+                else self[method === 'cert' ? 'certData' : 'serviceData'] = results[i];
+            });
             self.update();
-        });
+        }).finally(function() { if (self.refreshPending && self.refreshPending.promise === pending) self.refreshPending = null; });
+        this.refreshPending = {route: route, epoch: epoch, promise: pending};
+        return pending;
     },
     update: function() {
         if(this.displaySupport){var c=this.data.display_limits||{},r=c.requested,actual=(this.data.stats||{}).car||{};this.displaySupport.replaceChildren(row('iPhone 支持范围',c.iphone?c.iphone.note:'未知，尚未取得能力信息'),row('请求参数',r?r.width+'×'+r.height+' · 最高 '+r.fps+' 帧 · '+(r.hevc?'H.265':'H.264'):'—'),row('实际解码尺寸',actual.width&&actual.height?actual.width+'×'+actual.height:(this.data.hub||{}).video?'已收到媒体；等待当前浏览器解码上报':'尚未收到画面'));}
-        var self = this, d = this.data, st = d.stats || {}, f = st.f50 || {}, car = st.car || {}, server = st.server || {}, net = d.network || {}, hub = d.hub || {}, link = d.link || {};
+        var self = this, d = this.data, st = d.stats || {}, f = st.f50 || {}, car = screenReport(st), server = st.server || {}, net = d.network || {}, hub = d.hub || {}, link = d.link || {};
         this.error.textContent = d.error ? 'CowPlay 服务尚不可用：' + d.error : '';
         this.pill.textContent = d.error ? '服务状态未知' : '运行中 · ' + Math.floor((d.uptime_s || 0) / 60) + ' 分钟';
         this.version.textContent = '无线 CarPlay 接收端 · ' + (d.version || '—');
@@ -256,15 +297,18 @@ return view.extend({
             ]), '每 2 秒刷新'),
             section('视频与传输', card([E('div', {class: 'cw-kpis'}, [
                 ['输入帧率', val(server.fps_in, ' fps', 1), 'iPhone → F50'],
-                ['绘制帧率', val(car.fps, ' fps', 1), '车机浏览器上报'],
-                ['往返时间 RTT', val(car.rtt_ms, ' ms'), '车机 ↔ F50'],
+                ['绘制帧率', val(car.fps, ' fps', 1), reportAge(st)],
+                ['往返时间 RTT', val(screenRtt(st), ' ms'), '车机 ↔ F50 · ' + rttSource(st)],
                 ['视频码率', val(server.bitrate_bps == null ? null : server.bitrate_bps / 1e6, ' Mbps', 1), 'F50 接收统计']
             ].map(function(x) { return E('div', {class: 'cw-kpi'}, [E('span', {}, x[0]), E('strong', {class: 'cw-reading'}, x[1]), E('small', {}, x[2])]); })),
                 note('向 iPhone 请求：' + (d.spec ? d.spec.width + '×' + d.spec.height + ' · 最高 ' + d.spec.fps + ' fps · ' + (d.spec.hevc ? 'H.265' : 'H.264') : '—') + (d.automatic_fps_limit === 30 ? ' · 自动降帧已生效' : ''))])),
-            section('会话记录', card(table(['车机屏幕', 'iPhone', '请求画面', '开始', '状态'], (d.sessions || []).map(function(s) { var current = !s.ended_ms && st.session && s.id === st.session.id; return [current && d.viewer ? d.viewer.name + (d.viewer.ip ? ' · ' + d.viewer.ip : '') : '—', s.phone || '—', current && d.spec ? d.spec.width + '×' + d.spec.height + ' · ' + d.spec.fps + ' fps' : '—', new Date(s.started_ms).toLocaleTimeString(), s.ended_ms ? '已断开' : current && hub.display === 'BROWSER_FRAME_RENDERED' ? status('浏览器已绘制', 'ok') : s.first_frame_ms ? '已收到媒体' : '连接中']; }))))
+            section('会话记录', card(table(['iPhone', '开始', '持续时间', '首帧', '结果'], (d.sessions || []).filter(function(s) { return !s.ended_ms || s.phone || s.model || s.peer || s.first_frame_ms || s.end_reason || s.warnings || (s.events || []).some(function(e) { return e.kind === 'error' || e.kind === 'warn'; }); }).map(function(s) {
+                var end = s.ended_ms || Date.now(), seconds = Math.max(0,Math.round((end-s.started_ms)/1000));
+                return [s.phone && s.phone !== 'iPhone' ? s.phone : s.model || s.phone || '未完成识别', new Date(s.started_ms).toLocaleString(), Math.floor(seconds/60) + ' 分 ' + seconds%60 + ' 秒', s.first_frame_ms ? ((s.first_frame_ms-s.started_ms)/1000).toFixed(1) + ' 秒' : '未出画', s.ended_ms ? s.end_reason || '已结束' : status('进行中','ok')];
+            }))))
         );
         this.phoneTable.replaceChildren(card([table(['名称', '状态', '蓝牙地址', '最近使用', '自动连接', '操作'], (this.phones.phones || []).map(function(p) {
-            return [p.name, p.current ? status('当前 iPhone', 'ok') : p.online ? '在线' : '离线', p.bt || '—', p.last_ms ? new Date(p.last_ms).toLocaleString() : '—', p.preferred ? '首选' : '按最近使用', E('div', {class: 'cw-actions'}, [p.current ? E('span', {}, '当前 iPhone') : p.online ? self.action('切换', 'cmd', ['switchPhone', p.id]) : null, !p.current ? self.action('忘记', 'cmd', ['forgetPhone', p.id], true) : null].filter(Boolean))];
+            return [p.name, p.current ? status('当前 iPhone', 'ok') : p.online ? '蓝牙已连接' : '未连接', p.bt || '—', p.last_ms ? new Date(p.last_ms).toLocaleString() : '—', p.preferred ? '首选' : '按最近使用', E('div', {class: 'cw-actions'}, [p.current ? E('span', {}, '当前 iPhone') : !p.current ? self.action(p.online ? '切换' : '连接', 'cmd', [p.online ? 'switchPhone' : 'connect', p.id]) : null, !p.current ? self.action('忘记', 'cmd', ['forgetPhone', p.id], true) : null].filter(Boolean))];
         })), E('div', {class: 'cw-actions cw-end'}, [this.action('＋ 添加 iPhone', 'cmd', ['openPairWindow'], !!d.phone)])]), this.phones.pairing && this.phones.pairing.remaining_s != null ? note('配对窗口：' + this.phones.pairing.remaining_s + ' 秒；请在新 iPhone 上打开 设置 › 蓝牙 并选择“' + (this.phones.pairing.adapter_name || 'cowplay') + '”。') : note('添加新 iPhone 将结束当前 CarPlay，已有配对会保留。'));
         var pairing = this.phones.pairing;
         if (pairing && pairing.request != null && /^\d{6}$/.test(pairing.passkey || '')) this.phoneTable.append(section('蓝牙配对确认', card([row('配对码', E('code', {}, pairing.passkey.slice(0, 3) + ' ' + pairing.passkey.slice(3))), note('需要在 CowPlay 和 iPhone 两端确认。请打开配对页核对数字，再确认或拒绝；首次打开需输入上方的访问令牌。'), net.origin ? E('a', {href: net.origin.replace(/\/$/, '') + '/pair', target: '_blank', rel: 'noopener', class: 'btn cbi-button cbi-button-positive'}, '打开配对页确认或拒绝') : note('访问地址暂不可用，请在车机或手机配对页完成核码。')])));
@@ -280,7 +324,6 @@ return view.extend({
         this.about.replaceChildren(card([row('当前版本', d.version || '—'), row('构建', d.build || '—'), row('架构', sys.arch || '—'), row('系统', [sys.openwrt, sys.kernel].filter(Boolean).join(' · ') || '—'), row('蓝牙运行时', sys.bluez || '—'), row('许可证', 'GPL-3.0-only')]));
         if (this.lastSample && JSON.stringify(this.lastSample.context) !== JSON.stringify(d.context)) this.lastSample = null;
         if (this.mfiStatus) this.mfiStatus.textContent = (d.identity || {}).pending_restart ? '新身份已保存，等待手动重启 CowPlay；当前会话继续使用原身份。' : d.error ? '无法读取当前身份状态' : '当前服务已加载配件身份；文件内容不回显。';
-        if (this.segmentResult && JSON.stringify(this.segmentResult.context) !== JSON.stringify(d.context)) this.segmentResult = null;
         if (d.error) { ++this.diagEpoch; this.diagBody.replaceChildren(note('当前无法读取服务诊断。服务恢复后会自动刷新；已保存的手机与屏幕记录不会因此删除。')); }
         else if (this.page === 'diag') this.loadDiag();
         this.updateCert(); this.updateFooter(); this.syncActions();
@@ -297,23 +340,29 @@ return view.extend({
         var pre = E('pre', {class: 'cw-pre cw-raw', 'data-scroll': id, tabindex: '0'}, text);
         return E('div', {}, [E('div', {class: 'cw-actions'}, E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', click: function() { pre.scrollTop = pre.scrollHeight; }}, '滚动到底部')), pre]);
     },
+    stopSampling: function() {
+        this.sampling = false;
+        this.diagEpoch++;
+        this.diagPending = null;
+    },
     loadDiag: function() {
         var self = this, tab = this.diagTab, key = JSON.stringify([tab, this.sampling, this.logLevel, this.logModule, this.timelineScope, this.data.context]);
+        if (document.hidden) return Promise.resolve();
         if (this.diagPending && this.diagPending.key === key) return this.diagPending.promise;
         var epoch = ++this.diagEpoch;
         if (this.data.error || this.page !== 'diag') return Promise.resolve();
         this.root.querySelectorAll('[data-diag]').forEach(function(b) { var on = b.dataset.diag === tab; b.setAttribute('aria-selected', String(on)); b.parentElement.className = on ? 'cbi-tab' : 'cbi-tab-disabled'; });
-        var request = tab === 'checks' && !this.sampling ? Promise.resolve(this.lastSample || {diag: {checks: []}}) : tab === 'logs' ? cp.call('logs', this.logLevel, 150, this.logModule) : tab === 'timeline' ? cp.call('timeline', this.timelineScope) : cp.call(tab === 'info' || tab === 'proc' ? 'proc' : 'diag');
+        var request = tab === 'checks' && !this.sampling ? Promise.resolve(this.lastSample || {diag: {checks: []}, stats: {}, context: this.data.context}) : tab === 'logs' ? cp.call('logs', this.logLevel, 150, this.logModule) : tab === 'timeline' ? cp.call('timeline', this.timelineScope) : cp.call(tab === 'info' || tab === 'proc' ? 'proc' : 'diag');
         var pending = request.then(function(r) {
             if (epoch !== self.diagEpoch || self.data.error || self.page !== 'diag' || tab !== self.diagTab) return;
-            var content = [], st = self.data.stats || {}, car = st.car || {}, f = st.f50 || {}, phone = st.phone || {}, viewer = self.data.viewer || {}, win = viewer.window || {}, spec = self.data.spec;
+            var content = [], st = self.data.stats || {}, car = screenReport(st), f = st.f50 || {}, phone = st.phone || {}, viewer = self.data.viewer || {}, win = viewer.window || {}, spec = self.data.spec;
             if (tab === 'checks') {
-                var d = r.diag; if (self.sampling) self.lastSample = r;
+                var d = r.diag; self.lastSample = r;
                 if (!d) { self.diagBody.replaceChildren(note('暂时无法读取诊断。')); return; }
-                var stats = r.stats || {}, actual = stats.car || {}, server = stats.server || {}, device = stats.f50 || {}, requested = self.data.spec;
+                var stats = r.stats || {}, actual = screenReport(stats), server = stats.server || {}, device = stats.f50 || {}, requested = self.data.spec;
                 var samplingButton = E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', click: function() { self.sampling = !self.sampling; this.textContent = self.sampling ? '停止采样' : '开始采样'; self.loadDiag(); }}, self.sampling ? '停止采样' : '开始采样');
                 content = [section('实时数据', [E('div', {class: 'cw-actions'}, samplingButton),
-                    note(stats.ts_ms ? (self.sampling ? '采样中 · ' : '采样已停止 · ') + '最后读取 ' + new Date(stats.ts_ms).toLocaleString() : '点击“开始采样”读取设备指标；投屏页保持前台可取得绘制与网络上报。'),
+                    note(stats.ts_ms ? (self.sampling ? '采样中 · ' : '已读快照，未持续采样 · ') + '最后读取 ' + new Date(stats.ts_ms).toLocaleString() : self.sampling ? '正在读取当前快照。' : '采样已停止，点击“开始采样”读取当前数据。'),
                     stats.ts_ms ? measurements(d.checks || [], stats) : note('尚未开始采样'),
                     stats.ts_ms ? card([
                         row('实际解码尺寸', actual.width && actual.height ? actual.width + '×' + actual.height : '当前查看通道尚无有效画面'),
@@ -323,17 +372,15 @@ return view.extend({
                         row('可用内存', val(device.mem_free_mb, ' MB')),
                         row('设备 / 屏幕采样年龄', val(device.sample_age_ms, ' ms') + ' / ' + val(stats.car_sample_age_ms, ' ms'))
                     ]) : null].filter(Boolean)),
-                    section('连接检查与导出', card([E('div', {class: 'cw-actions'}, [self.action('开始检查', 'selftest', [], false, function(r) { self.segmentResult = r; self.loadDiag(); }), self.action('下载诊断包', 'bundle', [], false, function(r) { cp.download('cowplay-diag.json', r); })]),
-                        note('优先读取当前协议探测，必要时发送 ping 并请求视频帧。静止画面可无新帧；音频接收与现场声音输出分别确认。'),
-                        self.segmentResult ? table(['观测项', '状态', '返回数据'], (self.segmentResult.steps || []).map(function(s) { return [s.step, status(s.state === 'ok' || !s.state && s.ok ? '已观测' : s.state === 'failed' ? '未完成' : s.state === 'skipped' ? '未测量' : '未知', s.state === 'ok' || !s.state && s.ok ? 'ok' : s.state === 'failed' ? 'warn' : 'idle'), s.text]; })) : note('尚未运行检查'),
-                        self.segmentResult ? note('检查于 ' + new Date(self.segmentResult.ts_ms).toLocaleString() + ' · 用时 ' + self.segmentResult.ms + ' ms；结果仅对应本次连接，切换设备后清除。') : null].filter(Boolean))),
-                    note('诊断码 ' + (d.code || '—') + ' · 未采集的数据以“—”显示。诊断包不含配对密钥、令牌与 Wi-Fi 密码。')];
+                    note('未采集的数据以“—”显示。离开此页后停止采样；运行记录可在“日志”页查看和下载。')];
             } else if (tab === 'info') {
                 self.procData = r;
                 var sys = r.system || {};
-                content = [section('车机屏幕', card([row('浏览器', viewer.ua || '尚未连接'), row('窗口 · 画面区', win.w ? win.w + '×' + win.h + ' · ' + win.rw + '×' + win.rh : '—'), row('解码', car.decoder || '—'), row('到 F50 延迟 · 抖动', val(car.rtt_ms, ' ms') + ' · ' + val(car.jitter_ms, ' ms'))])),
-                    section('F50', card([row('系统', [sys.openwrt, sys.kernel].filter(Boolean).join(' · ') || '—'), row('上行', f.uplink || '—'), row('Wi‑Fi', [self.data.network && self.data.network.ssid, f.wifi && f.wifi.channel ? 'CH' + f.wifi.channel : null, f.wifi && f.wifi.clients != null ? f.wifi.clients + ' 台客户端' : null].filter(Boolean).join(' · ') || '—'), row('蓝牙', sys.bluez || '—')])),
-                    section('iPhone', card([row('名称', (self.data.phone || {}).name || '未连接'), row('型号 · 系统', [phone.model, phone.ios ? 'iOS ' + phone.ios : null].filter(Boolean).join(' · ') || '—'), row('Wi-Fi', val(phone.rssi, ' dBm') + ' · ' + val(phone.rate_mbps, ' Mbps')), row('请求画面', spec ? spec.width + '×' + spec.height + ' · ' + spec.fps + ' fps' : '—')]))];
+                var wifi = f.wifi || {};
+                content = [section('车机屏幕', card([row('浏览器', viewer.ua || '尚未连接'), row('窗口 · 画面区', win.w ? win.w + '×' + win.h + ' · ' + win.rw + '×' + win.rh : '—'), row('解码', car.decoder || '—'), row('到 F50 往返时间', val(screenRtt(st),' ms') + ' · ' + rttSource(st))])),
+                    section('F50', card([row('系统', [sys.openwrt, sys.kernel].filter(Boolean).join(' · ') || '—'), row('上行', f.uplink || '—'), row('蓝牙', sys.bluez || '—')])),
+                    section('CarPlay Wi-Fi 热点', card([row('实测接口', wifi.iface || '未找到匹配热点的接口'), row('实测 SSID', wifi.ssid || '未取得'), row('配置 SSID', wifi.configured_ssid || (self.data.network || {}).ssid || '未配置'), row('实测信道 / 频宽', val(wifi.channel, '') + ' / ' + val(wifi.width_mhz, ' MHz')), row('配置交接信道', val(wifi.configured_channel == null ? (self.data.network || {}).channel : wifi.configured_channel, '')), row('客户端数', val(wifi.clients, ' 台')), row('采样年龄', val(wifi.sample_age_ms, ' ms')), row('来源', wifi.source || 'iw 接口与客户端列表；不是配置值推测')])),
+                    section('iPhone', card([row('名称', (self.data.phone || {}).name || '未连接'), row('型号 · 系统', [phone.model, phone.ios ? 'iOS ' + phone.ios : null].filter(Boolean).join(' · ') || '—'), row('热点关联', phone.associated === true ? '已在目标热点客户端列表中识别' : phone.wifi_status === 'disconnected' ? '当前没有已连接手机' : '未知，未识别到当前手机的关联记录'),  row('请求画面', spec ? spec.width + '×' + spec.height + ' · ' + spec.fps + ' fps' : '—')]))];
             } else if (tab === 'timeline') {
                 content = [section('事件记录', card([
                     E('div', {class: 'cw-actions'}, [['current', '当前会话'], ['all', '全部事件']].map(function(scope) { return E('button', {type: 'button', class: 'btn cbi-button ' + (self.timelineScope === scope[0] ? 'cbi-button-positive' : 'cbi-button-neutral'), 'aria-pressed': String(self.timelineScope === scope[0]), click: function() { self.timelineScope = scope[0]; self.loadDiag(); }}, scope[1]); })),
@@ -348,29 +395,36 @@ return view.extend({
                     E('div', {class: 'cw-actions'}, [
                         E('label', {}, ['级别 ', E('select', {'aria-label': '日志级别', change: function() { self.logLevel = this.value; self.loadDiag(); }}, [['', '全部'], ['error', '仅错误'], ['warn', '警告与错误'], ['info', '信息及以上']].map(function(o) { return E('option', {value: o[0], selected: self.logLevel === o[0] || null}, o[1]); }))]),
                         E('label', {}, ['来源 ', E('select', {'aria-label': '日志来源', change: function() { self.logModule = this.value; self.loadDiag(); }}, [['', '全部来源']].concat(modules.map(function(m) { return [m, m]; })).map(function(o) { return E('option', {value: o[0], selected: self.logModule === o[0] || null}, o[1]); }))]),
-                        E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', click: function() { cp.download('cowplay-filtered.log', self.logLines.join('\n')); }}, '下载当前日志')
+                        self.action('下载日志', 'logs_export', [], false, function(r) { cp.download('cowplay.log', r.text); })
                     ]),
-                    note('按时间正序显示 · 本次显示 ' + entries.length + ' 条 / 匹配 ' + (r.matched == null ? r.total : r.matched) + ' 条；INFO 信息、WARN 警告、ERROR 错误、DEBUG 调试。导出使用相同筛选。'),
+                    note('显示 ' + entries.length + ' / ' + (r.matched == null ? r.total : r.matched) + ' 条 · 最近 150 条'),
+                    E('details',{},[E('summary',{},'容量与保留策略'),card([
+                        row('RAM 环形日志',r.memory ? val(r.memory.bytes/1048576,' / ',2) + val(r.memory.cap_bytes/1048576,' MiB') + ' · 已淘汰 ' + r.memory.evicted + ' 条' : '未知'),
+                        row('磁盘',r.persistent_enabled ? (r.storage || {}).active ? '写入中' : '写入不可用' : '未启用'),
+                        row('轮转与保留',r.storage ? '单文件 ' + val(r.storage.file_limit_bytes/1048576,' MiB') + ' · 归档 ' + val(r.storage.archive_limit_bytes/1048576,' MiB') + ' · ' + val(r.retention_days,' 天') : '未知'),
+                        row('写入队列',r.storage ? val(r.storage.queue_capacity_lines,' 行') + ' · 丢弃 ' + val(r.storage.queue_dropped,' 行') + ' · 失败 ' + val(r.storage.failures,' 次') : '未知'),
+                        note('跨 UTC 日期或达到大小轮转；syslog 由 OpenWrt 管理。下载为纯文本，包含当前进程与已保留磁盘日志的最近记录，最多 64 KiB 正文；不受页面筛选影响，截断与缺失会明确标注。')])]),
                     self.rawOutput('logs', self.logLines.join('\n') || '暂无日志')
                 ].filter(Boolean)))];
             } else {
                 self.procData = r;
                 var proc = r.process || {};
-                content = [section('进程', card([row('cowplay', proc.pid ? 'PID ' + proc.pid + ' · ' + val(proc.threads) + ' 线程 · RSS ' + val(proc.rss_kb, ' KB') + ' · CPU ' + val(proc.cpu_percent, '%') : '—'), row('程序', proc.binary || '—'), row('启动方式', proc.launcher || '—'), row('监听', (proc.ports || []).map(function(p) { return p.port + ' ' + p.use; }).join('；') || '—')])), section('当前 CowPlay 配置', card(E('pre', {class: 'cw-pre', 'data-scroll': 'config', tabindex: '0'}, r.config || '暂无配置')))];
+                content = [section('进程', card([row('cowplay', proc.pid ? 'PID ' + proc.pid + ' · ' + val(proc.threads) + ' 线程 · RSS ' + val(proc.rss_kb, ' KB') + ' · CPU ' + val(proc.cpu_percent, '%') : '—'), row('程序', proc.binary || '—'), row('启动方式', proc.launcher || '—')])), section('端口与用途', card([table(['用途','地址 / 端口','传输协议','活动状态'], (proc.ports || []).map(function(p) { return [p.use,E('code',{},p.port),p.transport || '未上报',p.activity || '未采集']; })),note(proc.ports_note || '固定端点来自配置与服务声明；动态媒体端口未逐个采集，不是完整 socket 扫描。')])), section('当前 CowPlay 配置', card(E('pre', {class: 'cw-pre', 'data-scroll': 'config', tabindex: '0'}, r.config || '暂无配置')))];
             }
             self.replaceDiag(content);
-        }).catch(function(e) { if (epoch === self.diagEpoch && !self.data.error && self.page === 'diag' && tab === self.diagTab) self.diagBody.replaceChildren(note('暂时无法读取此视图：' + e.message), E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', click: function() { if (tab === 'checks') self.sampling = !self.sampling; self.loadDiag(); }}, tab === 'checks' && self.sampling ? '停止采样' : '重试')); }).finally(function() { if (self.diagPending && self.diagPending.promise === pending) self.diagPending = null; });
+        }).catch(function(e) { if (epoch === self.diagEpoch && !self.data.error && self.page === 'diag' && tab === self.diagTab) self.diagBody.replaceChildren(note('暂时无法读取此视图：' + e.message), E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', click: function() { if (tab === 'checks' && self.sampling) self.sampling = false; self.loadDiag(); }}, tab === 'checks' && self.sampling ? '停止采样' : '重试')); }).finally(function() { if (self.diagPending && self.diagPending.promise === pending) self.diagPending = null; });
         this.diagPending = {key: key, promise: pending};
         return pending;
     },
     updateCert: function() {
         var c = this.certData || {}, net = this.data.network || {};
         var task = c.task || {};
-        var info = [row('证书来源', net.cert_source === 'acme' ? '自动续期' : net.cert_source === 'upload' || net.cert_source === 'uploaded' ? '手动上传' : net.cert_source || '—'), row('当前证书', (c.subject || []).join(', ') || '—'), row('有效期', c.days == null ? '未测得' : status(c.valid === false ? '未生效或已过期' : c.days === 0 ? '有效 · 不足 1 天' : c.days > 0 ? '剩 ' + c.days + ' 天' : '已过期', c.days > 30 ? 'ok' : 'warn'))];
+        var info = [row('证书来源', net.cert_source === 'acme' ? '自动续期' : net.cert_source === 'upload' || net.cert_source === 'uploaded' ? '手动上传' : net.cert_source || '—'), row('当前证书', c.details && c.details.dns_names ? c.details.dns_names.join(', ') || c.details.subject : (c.subject || []).join(', ') || '—'), row('有效期', c.days == null ? '未测得' : status(c.valid === false ? '未生效或已过期' : c.days === 0 ? '有效 · 不足 1 天' : c.days > 0 ? '剩 ' + c.days + ' 天' : '已过期', c.days > 30 ? 'ok' : 'warn'))].concat(certificateRows(c.details));
         if (c.error) info.push(row('证书状态', '读取失败：' + c.error));
         if (task.running || task.cert_ok === false) info.push(row('续期状态', task.running ? task.cert_progress || '处理中…' : task.cert_result || '续期失败'));
         this.certInfo.replaceChildren.apply(this.certInfo, info);
         this.certExtraInfo.replaceChildren(row('证书链', c.chain == null ? '—' : c.chain + ' 张证书'));
+        this.mfiInfo.replaceChildren.apply(this.mfiInfo, certificateRows(c.carplay).concat( c.pending_carplay ? [E('h4',{},'已保存，等待重启后生效'),note('以下是待生效身份，不是当前会话使用的证书。')].concat(certificateRows(c.pending_carplay)) : []));
         this.renewInfo.replaceChildren(row('申请域名', c.domain || net.origin || '—'), row('DNS 验证', (c.dns_provider || '未知') + ' · ' + (c.token_set ? '凭据已保存' : '未配置凭据')), row('续期任务', task.running ? task.cert_progress || '处理中…' : task.cert_result || '尚未运行'), row('最近续期', task.cert_ms ? new Date(task.cert_ms).toLocaleString() + ' · ' + (task.cert_ok === true ? '成功' : task.cert_ok === false ? '失败' : '未知') : '—'));
         this.renewButton.disabled = !!task.running || !L.hasViewPermission();
         this.rollbackButton.disabled = !c.rollback || !L.hasViewPermission();
@@ -382,12 +436,12 @@ return view.extend({
     },
     updateFooter: function() {
         if (this.restartRequired && Number.isInteger(this.restartPid) && Number.isInteger((this.data || {}).pid) && this.data.pid !== this.restartPid) this.restartRequired = false;
-        if (this.saveNote) this.saveNote.textContent = ({clean: '没有未应用的更改', dirty: '有更改尚未保存', saved: '已保存，尚未应用', applying: '正在应用配置…', reload_failed: '配置已提交，CowPlay 重载失败；请修正后重新应用', applied: '✓ 配置已应用'}[this.editState] || '') + (this.restartRequired ? '；地址或热点变更需要重启 CowPlay。' : '');
+        if (this.saveNote) this.saveNote.textContent = (this.configChanged ? '配置已在其他页面更新；请刷新页面后重新编辑，当前草稿未保存。' : {clean: '没有未应用的更改', dirty: '有更改尚未保存', saved: '已保存，尚未应用', applying: '正在应用配置…', reload_failed: '配置已提交，CowPlay 重载失败；请修正后重新应用', applied: '✓ 配置已应用'}[this.editState] || '') + (this.restartRequired ? '；地址或热点变更需要重启 CowPlay。' : '');
         if (this.footer) this.footer.hidden = !this.restartRequired && (this.page === 'overview' || this.page === 'diag') && (this.editState === 'clean' || this.editState === 'applied');
         if (this.footer) this.footer.querySelectorAll('button').forEach(function(b) { b.disabled = !!this.updateBusy || !L.hasViewPermission() || !!this.importRunning || !!this.applyPending || this.editState === 'applying'; }, this);
     },
     render: function(data) {
-        var self = this; this.data = data[3]; this.phones = data[4]; this.screens = data[5]; this.certData = data[6]; this.procData = data[7]; this.serviceData = data[8];
+        var self = this; this.savedConfigSnapshot = data[1].text; this.data = data[2]; this.phones = data[3]; this.screens = {}; this.certData = {}; this.procData = {}; this.serviceData = {};
         this.root = E('div', {class: 'cw'}); this.intro = E('p', {class: 'cw-intro'}); this.error = E('p', {class: 'alert-message warning cw-error', role: 'status'}); this.pill = E('span', {class: 'cw-pill'}); this.wirelessNotice = E('p', {class: 'alert-message warning cw-error', role: 'status'}); this.version = E('small');
         this.overview = E('div'); this.phoneTable = E('div'); this.screenTable = E('div'); this.runtime = E('div'); this.about = E('div'); this.diagBody = E('div', {'aria-live': 'polite'}); this.certInfo = E('div'); this.certExtraInfo = E('div'); this.renewInfo = E('div'); this.portStatus = E('p', {class: 'cw-foot', role: 'status'}); this.lanAddress = E('span'); this.runAddress = E('span');
         var mfiCert = '', mfiKey = '', mfiSending = false, mfiVersions = {certificate: 0, private_key: 0};
@@ -421,8 +475,12 @@ return view.extend({
         }
         var mfiInputs = [identityFile('CarPlay 证书 P7B / DER', 'certificate', 'PKCS7', '.p7b,.der'), identityFile('CarPlay 私钥 PKCS8 DER', 'private_key', 'PRIVATE KEY', '.pk8,.der')];
         this.mfiStatus = E('p', {class: 'cw-foot'});
+        this.mfiInfo = E('div');
         this.mfiSection = section('CarPlay 配件身份（MFi）', card([
             note('导入你从第三方合法取得的配件证书及匹配私钥。项目不提供此资料；与下方浏览器 HTTPS 证书分别配置。'),
+            this.mfiInfo,
+            this.action('下载当前 CarPlay 公共证书', 'certificate_export', ['carplay'], false, function(r) { cp.download(r.name,r.pem); }, function() { return !!(self.certData || {}).carplay && !(self.certData || {}).carplay.error; }),
+            this.privateKeyDownload('carplay','下载当前 CarPlay 私钥'),
             row('证书 P7B / X.509 DER', mfiInputs[0]), row('P-256 私钥 PKCS8 DER', mfiInputs[1]),
             E('div', {class: 'cw-actions'}, mfiButton), mfiNotice, this.mfiStatus,
             note('验证通过后成对保存，原文件保留。手动重启 CowPlay 后生效，重启会中断当前投屏。')
@@ -434,7 +492,7 @@ return view.extend({
         document.addEventListener('visibilitychange', function() { if (document.hidden) hideToken(); });
         this.tokenDisplay = token;
         this.tokenActions = E('div', {class: 'cw-actions'}, [this.action('显示令牌', 'token', function() { hideToken(); showEpoch = tokenEpoch; return []; }, false, function(r) { revealToken(r, showEpoch); }), E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', click: hideToken}, '隐藏令牌'), this.action('重置令牌', 'token_reset', function() { hideToken(); resetEpoch = tokenEpoch; return []; }, true, function(r) { revealToken(r, resetEpoch); })]);
-        var tokenField = E('input', {type: 'password', autocomplete: 'new-password', placeholder: '只写入，不回显', 'aria-label': '证书 DNS API 令牌'});
+        var tokenField = E('input', {type: 'password', autocomplete: 'new-password', placeholder: '只写入，不回显', 'aria-label': '证书 DNS API 令牌', disabled: !L.hasViewPermission() || null});
         this.dnsToken = tokenField;
         var dnsSnapshot = '';
         this.dnsTokenSave = this.action('保存证书 DNS 凭据', 'ddns_token', function() { dnsSnapshot = tokenField.value; tokenField.disabled = true; return [dnsSnapshot]; }, false, function() { if (tokenField.value === dnsSnapshot) tokenField.value = ''; }, null, null, function() { tokenField.disabled = !L.hasViewPermission(); });
@@ -486,12 +544,12 @@ return view.extend({
         this.rollbackButton = this.action('回滚到上一张证书', 'cert_rollback', [], true, null, function() { return !!self.certData.rollback && !(self.certData.task || {}).running; });
         this.renewButton = this.action('申请 / 续期', 'cert_renew', [], false, null, function() { return !(self.certData.task || {}).running; });
         this.certSettingsBody = E('div');
-        var certSection = section('HTTPS 证书', card([this.certInfo, row('证书链 PEM', certEditor), row('私钥 PEM', keyEditor), fileNotice, row('操作', E('div', {class: 'cw-actions'}, [certBtn, this.rollbackButton])), E('details', {'data-cert-details': ''}, [E('summary', {}, '证书要求'), this.certExtraInfo,
-            note('使用浏览器信任的完整证书链，域名和私钥须匹配。手动替换后停止自动续期。')])]));
+        var certSection = section('HTTPS 证书', card([this.certInfo, E('div',{class:'cw-actions'},[this.action('下载当前 TLS 公共证书', 'certificate_export', ['tls'], false, function(r) { cp.download(r.name,r.pem); }, function() { return !!(self.certData || {}).details && !(self.certData || {}).details.error; }),this.privateKeyDownload('tls','下载当前 TLS 私钥')]), row('证书链 PEM', certEditor), row('私钥 PEM', keyEditor), fileNotice, row('操作', E('div', {class: 'cw-actions'}, [certBtn, this.rollbackButton])), E('details', {'data-cert-details': ''}, [E('summary', {}, '证书要求'), this.certExtraInfo,
+            note('使用浏览器信任的完整证书链，域名和私钥须匹配。手动替换后停止自动续期。')])].filter(Boolean)));
         this.renewSection = section('证书申请与续期', E('details', {'data-certificate-renewal': ''}, [E('summary', {}, '自动申请 / 续期（可选）'), card([
             note('DNS-01 用于验证域名并签发证书，手动上传无需配置。'), this.renewInfo, this.certSettingsBody, this.renewButton,
             E('a', {href: 'https://letsencrypt.org/docs/challenge-types/', target: '_blank', rel: 'noopener'}, 'DNS 验证说明 ↗')])]));
-        var backupInput = E('input', {type: 'file', 'aria-label': '导入 CowPlay 配置'}), importNotice = note('请选择不超过 32 KB 的 CowPlay 配置文件。'), importSequence = 0, importReading = false, importModal, importProgress;
+        var backupInput = E('input', {type: 'file', 'aria-label': '导入 CowPlay 配置', disabled: !L.hasViewPermission() || null}), importNotice = note('请选择不超过 32 KB 的 CowPlay 配置文件。'), importSequence = 0, importReading = false, importModal, importProgress;
         this.importText = '';
         var restore = this.action('恢复配置', 'config_import', function() {
             backupInput.disabled = true; self.importRunning = true; self.root.inert = true; self.updateFooter();
@@ -521,18 +579,20 @@ return view.extend({
                 overview: self.overview,
                 devices: E('div', {}, [section('已保存的 iPhone', self.phoneTable), forms[0]]),
                 display: E('div', {}, [section('iPhone 能力与当前会话',self.displaySupport=E('div',{class:'cw-card'})),forms[1],note('接收端声明范围不是 iPhone 能力表；实际由手机决定是否接受。车机“控制”可边看边调，H.265 需显式选择且仍属实验。控制栏和网络属于本机设置。')]),
-                network: E('div', {}, [forms[2], self.mfiSection, self.wirelessInfo(), self.ddnsPanel = E('div', {}, self.ddnsInfo())]),
+                network: E('div', {}, [forms[2], self.mfiSection, self.wirelessPanel = E('div', {}, self.wirelessInfo()), self.ddnsPanel = E('div', {}, self.ddnsInfo())]),
                 diag: self.diagBody,
                 system: E('div', {}, [section('服务', self.runtime), section('配件身份', card(row('资料来源', '读取设备已有身份；不随软件包分发'))), forms[3], section('备份与恢复', card([row('CowPlay 配置（不含配件身份）', self.action('下载备份', 'config_export', [], false, function(r) { cp.download('cowplay.uci', r.text); })), row('导入配置', backupInput), importNotice, row('操作', E('div', {class: 'cw-actions'}, [restore])), note('恢复操作会替换 CowPlay 配置并刷新页面，未保存的编辑将丢弃；不修改配对和配件身份。')])), section('GitHub 安装与升级', updater.render(function() { return self.page === 'system'; }, function(busy) { self.updateBusy = busy; if (self.root) self.syncActions(); self.updateFooter(); }, function() { return !self.importRunning && !self.applyPending && ['dirty', 'saved', 'applying', 'reload_failed'].indexOf(self.editState) < 0; })), section('关于', self.about)])
             };
-            self.root.append(E('link', {rel: 'stylesheet', href: L.resource('cowplay/style.css')}), E('div', {class: 'cw-head'}, [E('div', {class: 'cw-grow'}, [E('h2', {}, 'CowPlay'), self.version]), self.pill]), E('ul', {class: 'cbi-tabmenu cw-tabs', role: 'tablist', 'aria-label': 'CowPlay 分组'}, tabs.map(function(t) { return E('li', {}, E('a', {href: '#' + t[0], role: 'tab', 'aria-label': t[1], 'data-target': t[0], 'data-diag': diagnosticTabs.some(function(d) { return d[0] === t[0]; }) ? t[0] : null, click: function(ev) { ev.preventDefault(); self.select(t[0]); }}, t[1])); })), self.intro, self.error);
+            self.root.append(E('link', {rel: 'stylesheet', href: L.resource('cowplay/style.css')}), E('div', {class: 'cw-head'}, [E('div', {class: 'cw-grow'}, [E('h2', {}, 'CowPlay'), self.version]), self.pill]), E('ul', {class: 'cbi-tabmenu cw-tabs', role: 'tablist', 'aria-label': 'CowPlay 分组'}, tabs.map(function(t) { return E('li', {}, E('a', {href: '#' + t[0], role: 'tab', 'aria-label': t[1], 'data-target': t[0], 'data-diag': diagnosticTabs.some(function(d) { return d[0] === t[0]; }) ? t[0] : null, click: function(ev) { ev.preventDefault(); self.select(t[0]); }}, t[1])); }).concat([E('li', {}, E('a', {href: L.url('admin/services/cowplay/tesla'), 'aria-label': 'Tesla 车辆'}, 'Tesla 车辆'))])), self.intro, self.error);
             Object.keys(panes).forEach(function(page) { self.root.append(E('div', {'data-page': page, role: 'tabpanel'}, panes[page])); });
             self.update(); self.select(self.page === 'diag' ? self.diagTab : self.page);
             var markDirty = function(ev) { if (ev.target.closest('.cbi-map') && !ev.target.closest('.cw-pem-editor')) { self.formEpoch++; confirmation.cancel(); self.setEditState('dirty'); } };
             self.root.addEventListener('input', markDirty);
             self.root.addEventListener('change', markDirty);
             uci.changes().then(function(changes) { if (Object.keys(changes).length && self.editState === 'clean') self.setEditState('saved'); });
-            poll.add(function() { return self.refresh(); }, 2);
+            poll.add(function() { if (!document.hidden) return self.refresh(); }, 2);
+            document.addEventListener('visibilitychange', function() { if (document.hidden) self.stopSampling(); else if (self.page === 'diag' && self.diagTab === 'checks') self.loadDiag(); });
+            window.addEventListener('pagehide', function() { self.stopSampling(); });
             setTimeout(function() { network.inspect(self, Number(self.portOption.formvalue('main'))); network.resume(self).catch(cp.failure); }, 0);
             return self.root;
         });
@@ -555,7 +615,11 @@ return view.extend({
         var self = this, ddnsBefore = null, persisted = false, maps = this.maps;
         // All maps share LuCI's UCI cache. Parse all inputs before one save, then refresh them.
         maps.forEach(function(m) { m.checkDepends(); });
-        return Promise.all(maps.map(function(m) { return m.parse(); }))
+        return cp.call('config_export').then(function(current) {
+                if (self.savedConfigSnapshot == null) throw new Error('无法核对配置版本，请刷新页面后重试');
+                if (self.configChanged || current.text !== self.savedConfigSnapshot) { self.configChanged = true; self.updateFooter(); throw new Error('配置已在其他页面更新，请刷新页面后重新编辑；当前草稿未保存'); }
+                return Promise.all(maps.map(function(m) { return m.parse(); }));
+            })
             .then(function() { return network.inspect(self, Number(self.portOption.formvalue('main'))); })
             .then(function() {
                 if (self.disableDdnsPending) {
@@ -564,7 +628,8 @@ return view.extend({
                 }
                 return uci.save();
             })
-            .then(function() { persisted = true; self.disableDdnsPending = false; })
+            .then(function() { persisted = true; self.disableDdnsPending = false; return cp.call('config_export'); })
+            .then(function(current) { self.savedConfigSnapshot = current.text; })
             .then(function() { return Promise.all(maps.map(function(m) { return m.load().then(function() { return m.renderContents(); }); })); })
             .then(L.bind(function() { this.placeSections(); this.setEditState('saved'); this.ddnsPanel.replaceChildren(this.ddnsInfo()); return ui.changes.init(); }, this)).finally(function() { if (!persisted && ddnsBefore) Object.keys(ddnsBefore).forEach(function(k) { uci.set('cowplay', 'main', k, ddnsBefore[k]); }); }).catch(function(e) { cp.failure(e); throw e; });
     },
@@ -596,7 +661,7 @@ return view.extend({
                 cp.call('reload').then(function(r) {
                     self.restartRequired = !!r.restart_required; self.restartPid = self.data.pid; self.updateFooter();
                     self.setEditState('applied');
-                    return self.refresh();
+                    return cp.call('config_export').then(function(current) { self.savedConfigSnapshot = current.text; return self.refresh(); });
                 }).catch(function(e) { self.setEditState('reload_failed'); cp.failure(e); });
             };
             document.addEventListener('uci-applied', self.applyListener, {once: true});

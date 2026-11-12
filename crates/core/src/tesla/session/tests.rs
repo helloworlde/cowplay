@@ -219,3 +219,122 @@ fn cancelled_query_retires_uuid_without_resetting_session_or_counter() {
     let fresh=synthetic_response(&c,&proto::nested(2,&proto::nested(19,&[])));
     assert!(matches!(c.accept_response(&fresh,1000).unwrap(),Some(Update::Tires(_))));
 }
+
+#[test]
+fn driver_enrollment_requires_an_explicit_permission() {
+    let identity = example_identity();
+    assert_eq!(
+        identity.enrollment_request(),
+        identity.enrollment_request_for(EnrollmentPermission::VehicleMonitor)
+    );
+    let bytes = identity.enrollment_request_for(EnrollmentPermission::Driver);
+    let outer = Message::parse(&bytes).unwrap().nested(1).unwrap().unwrap();
+    let permission = Message::parse(outer.bytes(2).unwrap().unwrap())
+        .unwrap()
+        .nested(16)
+        .unwrap()
+        .unwrap()
+        .nested(5)
+        .unwrap()
+        .unwrap();
+    assert_eq!(permission.int(4).unwrap(), Some(3));
+}
+
+#[test]
+fn climate_query_and_command_share_authenticated_sessions_without_cross_acceptance() {
+    let mut c = synthetic_session();
+    let request = c.climate_query().unwrap();
+    assert_eq!(Message::parse(&request).unwrap().int(52).unwrap(), Some(2));
+    assert_eq!(
+        c.climate_command(ClimateCommand::Power { on: true }),
+        Err(Error::State)
+    );
+    let mut fields = Vec::new();
+    proto::int(110, 0, &mut fields);
+    proto::fixed(103, 21.5f32.to_bits(), &mut fields);
+    let mut body = proto::nested(1, &[]);
+    body.extend(proto::nested(2, &proto::nested(4, &fields)));
+    let response = synthetic_response(&c, &body);
+    assert_eq!(c.accept_climate_ack(&response), Err(Error::State));
+    let mut tampered = response.clone();
+    *tampered.last_mut().unwrap() ^= 1;
+    assert_eq!(
+        c.accept_climate_response(&tampered),
+        Err(Error::Authentication)
+    );
+    let state = c.accept_climate_response(&response).unwrap().unwrap();
+    assert_eq!(state.hvac_on, Some(false));
+    assert_eq!(state.driver_temp_celsius, Some(21.5));
+    assert_eq!(c.accept_climate_response(&response).unwrap(), None);
+    c.climate_command(ClimateCommand::Power { on: true })
+        .unwrap();
+    assert!(
+        !c.accept_climate_ack(&response).unwrap(),
+        "late query response cannot acknowledge a command"
+    );
+    let ack = synthetic_response(&c, &proto::nested(1, &[]));
+    assert_eq!(c.accept_response(&ack, 1000), Err(Error::State));
+    assert!(c.accept_climate_ack(&ack).unwrap());
+    assert!(
+        !c.accept_climate_ack(&ack).unwrap(),
+        "execution acknowledgement is consumed once"
+    );
+}
+
+#[test]
+fn climate_commands_require_authenticated_application_success_and_retire_on_timeout() {
+    let mut c = synthetic_session();
+    c.climate_command(ClimateCommand::Power { on: false })
+        .unwrap();
+    let mut waiting = reply_envelope(&c);
+    proto::bytes(12, &[8, 1], &mut waiting);
+    assert!(!c.accept_climate_ack(&waiting).unwrap());
+    assert!(c.pending.is_some());
+    let bare = reply_envelope(&c);
+    assert_eq!(c.accept_climate_ack(&bare), Err(Error::Authentication));
+    let ack = synthetic_response(&c, &proto::nested(1, &[]));
+    let mut tampered = ack.clone();
+    *tampered.last_mut().unwrap() ^= 1;
+    assert_eq!(c.accept_climate_ack(&tampered), Err(Error::Authentication));
+    c.pending.as_mut().unwrap().since = Instant::now() - Duration::from_secs(6);
+    assert_eq!(c.accept_climate_ack(&ack), Err(Error::Expired));
+    assert!(c.pending.is_none());
+    assert!(!c.accept_climate_ack(&ack).unwrap());
+    for (body, error) in [
+        (proto::nested(1, &[8, 1]), Error::Rejected),
+        (Vec::new(), Error::Malformed),
+    ] {
+        let mut c = synthetic_session();
+        c.climate_command(ClimateCommand::Power { on: true })
+            .unwrap();
+        let response = synthetic_response(&c, &body);
+        assert_eq!(c.accept_climate_ack(&response), Err(error));
+        assert!(c.pending.is_none());
+    }
+}
+
+#[test]
+fn climate_command_resync_does_not_acknowledge_or_reemit_the_command() {
+    let mut c = synthetic_session();
+    c.climate_command(ClimateCommand::Power { on: true })
+        .unwrap();
+    let s = c.session.as_ref().unwrap();
+    let mut info = Vec::new();
+    proto::int(1, 50, &mut info);
+    proto::bytes(2, &s.remote_public, &mut info);
+    proto::bytes(3, &s.epoch, &mut info);
+    proto::fixed(4, 1002, &mut info);
+    let tag = session_tag(
+        &s.key[..],
+        c.vin.as_bytes(),
+        &c.pending.as_ref().unwrap().uuid,
+        &info,
+    );
+    let mut update = reply_envelope(&c);
+    proto::bytes(15, &info, &mut update);
+    proto::bytes(13, &proto::nested(6, &proto::nested(1, &tag)), &mut update);
+    assert_eq!(c.accept_climate_ack(&update), Err(Error::Resync));
+    assert!(c.pending.is_none());
+    assert_eq!(c.session.as_ref().unwrap().counter, 50);
+    assert!(!c.accept_climate_ack(&update).unwrap());
+}

@@ -52,6 +52,7 @@
 .cw-sample dd { margin: 0; text-align: end; }
 .cw-pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32em; overflow: auto; }
 .cw .cw-raw { min-height: 14em; font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: .6em .75em; margin: .5em 0 0; border: 1px solid rgba(127,127,127,.3); tab-size: 4; }
+.cw-fingerprint { overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
 .cw-error:empty { display: none; }
 .cw-state[data-state=ok] { color: var(--success-color-high, var(--success-color, inherit)); }
 .cw-state[data-state=warn] { color: var(--warn-color-high, var(--warning-color, inherit)); }

@@ -54,7 +54,7 @@ export type Quality = 'auto' | 'smooth' | 'sharp' | 'custom';
 export type Resolution = 'native' | '1.5x' | '720p' | '1080p' | '1440p' | '2160p' | `${number}x${number}`;
 export interface ScreenPrefs { quality: Quality; resolution: Resolution; fps: number; codec: 'h264' | 'hevc'; call: 'bt' | 'web'; rail_side: 'left' | 'right'; ui_size: 'small' | 'std' | 'large'; right_hand_drive: boolean; night: boolean; debug: boolean }
 export interface WindowInfo { w: number; h: number; dpr: number; rw: number; rh: number }
-/** `selected`: the phone the F50 calls (or last called). `online`: Bluetooth currently connected. */
+/** `selected`: the phone the receiver calls (or last called). `online`: Bluetooth currently connected. */
 export interface Phone { id: string; name: string; online: boolean; current: boolean; selected?: boolean; preferred: boolean; bt: string; last_ms: number | null }
 export interface NearbyDevice { id: string; name: string; iphone: boolean; phone: boolean; rssi: number | null }
 export interface PairingStatus {
@@ -85,7 +85,7 @@ export const linkBusy = (s: State) => {
 };
 /** A connection failure from the last ten minutes, still worth showing. */
 export const recentLinkError = (s: State) => s.link.error && s.now_ms - s.link.error.ts_ms < 600_000 ? s.link.error : null;
-/** The phone the F50 is calling (or just failed to reach, or used before a stop), else the default one. */
+/** The phone the receiver is calling (or just failed to reach, or used before a stop), else the default one. */
 export function targetPhone(s: State | null): Phone | undefined {
   const list = s?.phones ?? [];
   if (s?.pairing.device && (pairingActive(s.pairing) || s.pairing.pairing_error || /^paired$/i.test(s.pairing.phase))) return list.find(x=>x.id===s.pairing.device);
@@ -94,7 +94,7 @@ export function targetPhone(s: State | null): Phone | undefined {
 }
 export type PairStage = 'start' | 'waiting' | 'code' | 'finishing' | 'connecting' | 'failed' | 'connected';
 /** One reading of the pairing window for every page. After the bond, the window ends (Cancelled)
- * while the F50 invites the new phone; that phone stays the window's device until a new window. */
+ * while the receiver invites the new phone; that phone stays the window's device until a new window. */
 export function pairStage(s: State): PairStage {
   const p = s.pairing, dev = p.device ? s.phones?.find(x => x.id === p.device) : undefined;
   if (pairingCode(p)) return 'code';
@@ -126,20 +126,22 @@ export interface State {
   handoff?: boolean;
   pairing: PairingStatus;
   link: Link;
-  hub: { verified: boolean; phone: boolean; viewer: boolean; video: boolean; display: string; protocol: string };
+  hub: { verified: boolean; phone: boolean; viewer: boolean; video: boolean; display: string; protocol: string;
+    ultra?: {enabled: boolean; channels: boolean[]; climate_control: {available: boolean; allowed: boolean; feedback?: {sequence:number; at_ms:number; age_ms:number; message:string}}} };
+  vehicle?: {enabled: boolean; connected: boolean; phase: string};
   spec: Spec | null;
   display_limits?: DisplayLimits;
   session: SessionSummary | null;
   policy: { ask_when_multi: boolean; ask_timeout: number; stall_ms: number; retries: number; stall_card: boolean; token_required: boolean; max_fps: number; max_res: string };
   network: Network;
   wifi_qr: string | null;
-  diag: { level: 'ok' | 'warn' | 'error'; problems: number; title: string };
+  diag: { level: 'ok' | 'warn' | 'error' | 'unknown'; problems: number; title: string };
 }
 export interface DisplayLimits {
   receiver:{min_width:number;min_height:number;max_width:number;max_height:number;dimension_step:number;frame_rates:number[];codecs:string[];resolution_aliases:Record<string,string>};
   iphone:{ranges_known:false;note:string}; requested:Spec|null; observed:null;
 }
-export interface Network { platform?: string; ssid: string | null; channel: number | null; origin: string; host: string; lan_ip: string | null; luci: string | null; cert_days: number | null; cert_source: string; ddns: { enabled: boolean; provider: string; last_ms: number | null; ok: boolean | null } }
+export interface Network { device_name?: string; receiver_name?: string; platform?: string; ssid: string | null; channel: number | null; origin: string; host: string; lan_ip: string | null; luci: string | null; cert_days: number | null; cert_source: string; ddns: { enabled: boolean; provider: string; last_ms: number | null; ok: boolean | null } }
 export const getState = () => api<State>('/api/state');
 export const setPrefs = (prefs: Partial<ScreenPrefs>, target?: 'viewer', signal?: AbortSignal, screenId?: string) => api<{ prefs: ScreenPrefs; spec: Spec | null }>('/api/prefs', { body: {prefs,...(target?{target}:{}),...(screenId?{screen_id:screenId}:{})}, signal });
 
@@ -148,20 +150,19 @@ export interface CarReport { fps?: number; decode_ms?: number; rtt_ms?: number; 
 export interface Stats {
   ts_ms: number; diag_code: string; session: { id: string; started_ms: number; phone: string | null; first_frame_ms: number | null } | null; spec: Spec | null;
   server: { frames_in: number; bytes_in: number; dropped: number; keyframe_requests: number; fps_in: number; bitrate_bps: number; since_last_frame_ms: number | null; phone_rtt_ms: number | null };
-  car: CarReport | null; history: Record<string, (number | null)[]>; stalls_10m: number;
+  car: CarReport | null; car_last_report?: CarReport | null; car_sample_age_ms?: number | null; history: Record<string, (number | null)[]>; stalls_10m: number;
   f50: { sample_age_ms?: number | null; cpu: number | null; temp: number | null; mem_free_mb: number | null; mem_total_mb: number | null; wifi: { sample_age_ms?: number; iface: string | null; ssid: string | null; channel: number | null; width_mhz: number | null; clients: number | null } | null; uplink: string | null };
   /** model/ios: what the iPhone reported in its CarPlay SETUP (hardware identifier, iOS version). */
-  phone: { ip: string | null; name: string | null; rssi: number | null; rate_mbps: number | null; retry_pct: number | null; bt: string | null; model?: string | null; ios?: string | null; wifi_status?: string; associated?: boolean };
+  phone: { ip: string | null; name: string | null; rssi: number | null; rate_mbps: number | null; retry_pct: number | null; bt: string | null; model?: string | null; ios?: string | null; wifi_status?: string; associated?: boolean | null };
 }
 /** iPhone Wi‑Fi link quality; says so when the station is on the hotspot but the driver reports nothing. */
 export function phoneWifi(st: Stats | null): string {
   const p = st?.phone;
   if (!p) return '—';
   if (p.rssi == null && p.rate_mbps == null) {
-    const reasons: Record<string,string> = {driver_unavailable:'驱动未提供信号/速率',partial:'驱动仅提供部分指标',unidentified:'未识别 iPhone 对应的 Wi‑Fi 客户端',station_missing:'未找到 iPhone 的 Wi‑Fi 客户端',query_failed:'Wi‑Fi 采样失败',no_interface:'未找到 Wi‑Fi 接口',disconnected:'iPhone 未连接',stale:'Wi‑Fi 数据已过期'};
-    const reason=reasons[p.wifi_status ?? ''];
-    if(p.associated&&(p.wifi_status==='driver_unavailable'||p.wifi_status==='partial'))return `已连热点 · ${reason}`;
-    return reason ?? (p.associated ? '已连热点 · 驱动不提供信号' : '—');
+    if (p.associated) return '已连热点';
+    const reasons: Record<string,string> = {unidentified:'尚未识别热点关联',station_missing:'未找到热点关联',query_failed:'热点关联查询失败',no_interface:'未找到热点接口',disconnected:'iPhone 未连接',stale:'热点关联已过期'};
+    return reasons[p.wifi_status ?? ''] ?? '关联未知';
   }
   return [p.rssi != null ? `${Math.round(p.rssi)} dBm` : null, p.rate_mbps != null ? `${Math.round(p.rate_mbps)} Mbps` : null].filter(Boolean).join(' · ');
 }
@@ -170,9 +171,9 @@ export function phoneModel(st: Stats | null): string {
   const p = st?.phone;
   return p?.model || p?.ios ? [p.model, p.ios ? `iOS ${p.ios}` : null].filter(Boolean).join(' · ') : '—';
 }
-export interface DiagCheck { group: string; name: string; value: number | null; text: string; limit: string; ratio: number; ok: boolean; known: boolean }
+export interface DiagCheck { group: string; name: string; value: number | null; text: string; limit: string; ratio: number; ok: boolean | null; known: boolean }
 export interface Diagnosis {
-  verdict: { level: 'ok' | 'warn' | 'error'; title: string; detail: string; action: { kind: 'smooth' | 'auto'; label: string } | null };
+  verdict: { level: 'ok' | 'warn' | 'error' | 'unknown'; title: string; detail: string; action: { kind: 'smooth' | 'auto'; label: string } | null };
   checks: DiagCheck[]; events: { level: string; title: string; cause: string; ts_ms: number }[]; code: string; problems: number;
   selftest: { passed: number; warned: number; failed: number; checks: unknown[] } | null;
 }

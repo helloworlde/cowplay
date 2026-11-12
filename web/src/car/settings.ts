@@ -1,3 +1,4 @@
+import {receiverName, receiverPlatform, teslaManagementUrl} from '../shared/receiver';
 // 03 · Settings (parked): picture, calls, display, iPhone, devices, diagnosis, about.
 import {$, clear, h} from '../shared/dom';
 import {qrSvg} from '../shared/qr';
@@ -44,8 +45,11 @@ export function renderTabs(): void {
     ['diag', '诊断', '✚', '#FF9F0A', '实测数据'],
     ['about', '关于', '…', '#8E8E93', s?.version ?? ''],
   ];
-  clear(tabs, ...defs.map(([id, label, glyph, color, val, cls]) => h('button', {type: 'button', class: 's-tab', 'aria-current': app.tab === id ? 'page' : 'false', onclick: () => { location.hash = `settings/${id}`; }},
+  clear(tabs, ...defs.map(([id, label, glyph, color, val, cls]) => h('button', {type: 'button', id: `settings-tab-${id}`, class: 's-tab', 'aria-current': app.tab === id ? 'page' : 'false', onclick: () => { location.hash = `settings/${id}`; }},
     h('span', {class: 's-ico', style: `background:${color}`}, glyph), h('span', {class: 'lbl'}, label), h('span', {class: `val ${cls ?? ''}`}, val))));
+  const tesla = teslaManagementUrl(s);
+  if (tesla) tabs.insertBefore(h('a', {id: 'settings-tesla', class: 's-tab', href: tesla, target: '_blank', rel: 'noopener noreferrer'},
+    h('span', {class: 's-ico', style: 'background:#E82127'}, 'T'), h('span', {class: 'lbl'}, 'Tesla 车辆'), h('span', {class: 'val'}, '配对与连接 ↗')), tabs.querySelector('#settings-tab-devices'));
   tabs.scrollTop = scroll;
   if (shownTab !== app.tab || tabsHeight !== tabs.clientHeight) {
     const current = tabs.querySelector<HTMLElement>('[aria-current=page]');
@@ -81,16 +85,15 @@ export function renderPane(a: SettingsActions): void {
       body.push(group(
         radio('车机蓝牙（推荐）', '车自带的麦克风和扬声器', p.call === 'bt', () => a.setPrefs({call: 'bt'})),
         radio('这块屏幕的麦克风', '需要 HTTPS · 切换后 iPhone 重新连接', p.call === 'web', () => a.setPrefs({call: 'web'}))));
-      body.push(foot('车机蓝牙使用车辆已有的通话设备；浏览器麦克风需要授权。切换后 iPhone 会重新连接，实际通话路线需现场确认。'));
+      body.push(foot('切换通话路线会重连 iPhone，配对保留。屏幕麦克风需浏览器授权，实际通话路线以现场为准。'));
       body.push(a.audioControls());
-      body.push(group(h('div', {class: 'row'}, h('span', {class: 't'}, '音乐与导航声音'), h('span', {class: 'val'}, loc.audio ? `这块屏幕 · ${Math.round(loc.audio.rate / 1000)} kHz ${loc.audio.channels >= 2 ? '立体声' : '单声道'}` : '尚未建立音频'))));
+      if (loc.audio) body.push(group(h('div', {class: 'row'}, h('span', {class: 't'}, '音乐与导航声音'), h('span', {class: 'val'}, `这块屏幕 · ${Math.round(loc.audio.rate / 1000)} kHz ${loc.audio.channels >= 2 ? '立体声' : '单声道'}`))));
       break;
     case 'display':
       body.push(h('div', {class: 'g-label'}, '控制栏位置（放在靠近驾驶员的一侧）'));
       body.push(h('div', {class: 'side-cards', role: 'radiogroup', 'aria-label': '控制栏位置'}, ...(['left', 'right'] as const).map(side => h('button', {type: 'button', class: 'side-card', role: 'radio', 'aria-checked': String(p.rail_side === side), onclick: () => a.setPrefs({rail_side: side})},
         h('span', {class: `mini ${side}`}, h('i'), h('b')), h('span', {class: 't'}, h('b', {}, side === 'left' ? '左侧' : '右侧'), h('small', {}, side === 'left' ? '控制栏靠左' : '控制栏靠右'))))));
       body.push(group(
-        h('div', {class: 'row'}, h('span', {class: 't'}, 'CarPlay 控件大小'), h('button',{type:'button',class:'tint',onclick:()=>{location.hash='settings/pic';}},'在画面设置中调整')),
         switchRow('row', 'CarPlay 夜间外观', null, p.night, () => a.setPrefs({night: !p.night})),
         switchRow('row', '投屏时显示调试信息', '右上角半透明小窗；也可在“控制”中开关', p.debug, () => a.setPrefs({debug: !p.debug}))));
       break;
@@ -105,7 +108,7 @@ export function renderPane(a: SettingsActions): void {
     case 'devices': body.push(...devices(a)); break;
     case 'diag': body.push(...diagnosis(a)); break;
     case 'about': {
-      body.push(foot('Based on LIVI by Lasse Heitgres (https://github.com/f-io/LIVI) · Ultra 原型使用假数据'));
+      const noticesOpen = pane.querySelector<HTMLDetailsElement>('.about-notices')?.open ?? false;
       const rows: [string, string, boolean][] = [['版本', s.version, false], ['构建', s.build, true], ['访问地址', s.network.host, true], ['这块屏幕', `${browserName()} · 已授权`, false], ['连接方式', '无线 CarPlay', false], ['服务运行', minutes(s.uptime_s), false]];
       const qr = (text: string | null, t: string, sub: string, aria: string) => {
         const box = h('div', {class: 'qr-box', role: 'img', 'aria-label': aria});
@@ -117,6 +120,9 @@ export function renderPane(a: SettingsActions): void {
         h('div', {class: 'qr-col'},
           qr(s.network.luci, s.network.platform === 'linux' ? 'CowPlay 管理' : '管理页（OpenWrt LuCI）', s.network.platform === 'linux' ? '画面上限、证书、访问令牌' : 'Wi‑Fi、证书、DDNS、令牌、系统', '管理页二维码'),
           qr(`${location.origin}/phone${app.ticket ? `#t=${app.ticket.value}` : ''}`, '手机控制台', '遥控、诊断、日志', '手机控制台二维码'))));
+      body.push(h('details', {class: 'about-notices', open: noticesOpen},
+        h('summary', {}, '开源许可'),
+        h('p', {}, 'Based on LIVI by Lasse Heitgres (', h('a', {href: 'https://github.com/f-io/LIVI', target: '_blank', rel: 'noopener noreferrer'}, 'https://github.com/f-io/LIVI'), ')')));
     }
   }
   clear(pane, head, ...body);
@@ -145,9 +151,9 @@ function devices(a: SettingsActions): HTMLElement[] {
     car: ['车', '这块屏幕', `${browserName()} · 已授权`, s.me.viewing ? '当前投屏屏幕' : '未投屏', s.me.viewing ? 'ok' : 'idle', [
       ['浏览器', browserName()], ['窗口', `${window.innerWidth}×${window.innerHeight} · DPR ${devicePixelRatio}`, 1], ['画面区', `${loc.rw}×${loc.rh}（偶数对齐）`, 1],
       ['解码器', st?.car?.decoder ?? '—'], ['地址', me?.ip || '—', 1],
-      ['到 F50', `RTT ${num(app.local.rttMs, ' ms')} · 抖动 ${num(app.local.jitterMs, ' ms')}`, 1],
+      ['到接收端', `RTT ${num(app.local.rttMs, ' ms')} · 抖动 ${num(app.local.jitterMs, ' ms')}`, 1],
       ['页面', `${document.visibilityState === 'visible' ? '前台' : '后台'} · ${loc.wake ? '屏幕常亮' : '未保持常亮'}`], ['安全连接', `HTTPS · ${s.network.cert_days !== null ? (s.network.cert_days >= 0 ? '证书有效' : '证书过期') : '证书未知'}`]]],
-    f50: ['F50', `${sys?.model ?? 'F50'} · CowPlay ${s.version}`, `${sys?.openwrt ?? 'OpenWrt'} · 运行 ${minutes(s.uptime_s)}`, '服务接口可用', 'ok', [
+    f50: ['主机', `${receiverName(s)} · ${sys?.model ?? receiverPlatform(s)}`, `${sys?.os ?? sys?.openwrt ?? receiverPlatform(s)} · 运行 ${minutes(s.uptime_s)}`, '服务接口可用', 'ok', [
       ['CPU · 温度', `${num(st?.f50.cpu, '%')} · ${num(st?.f50.temp, '°C')}`, 1], ['内存可用', `${num(st?.f50.mem_free_mb)} / ${num(st?.f50.mem_total_mb)} MB`, 1],
       ['Wi-Fi 热点', `${s.network.ssid ?? '—'} · ${st?.f50.wifi?.channel ?? s.network.channel ? `CH${st?.f50.wifi?.channel ?? s.network.channel}` : '—'}`], ['客户端', st?.f50.wifi?.clients != null ? `${st.f50.wifi.clients} 台` : '—'],
       ['上行', st?.f50.uplink ?? '—'], ['蓝牙', sys?.bluez ?? '—'],
@@ -160,7 +166,7 @@ function devices(a: SettingsActions): HTMLElement[] {
   const tabDot = {car: s.me.viewing ? '#30D158' : '#636366', f50: '#30D158', phone: s.hub.phone ? '#30D158' : '#636366'};
   const dv = devs[app.devTab];
   const tabs = h('div', {class: 'segs wide', role: 'tablist', 'aria-label': '设备'}, ...(['car', 'f50', 'phone'] as const).map(t => h('button', {type: 'button', role: 'tab', 'aria-selected': String(app.devTab === t), 'aria-checked': String(app.devTab === t), onclick: () => { app.devTab = t; renderPane(a); }},
-    h('i', {style: `background:${tabDot[t]}`}), {car: '车机屏幕', f50: 'F50', phone: 'iPhone'}[t])));
+    h('i', {style: `background:${tabDot[t]}`}), {car: '车机屏幕', f50: receiverPlatform(s), phone: 'iPhone'}[t])));
   const card = h('section', {class: 'group'},
     h('div', {class: 'dev-head'}, h('span', {class: 'dev-badge'}, dv[0]), h('span', {class: 't', style: 'flex:1;display:flex;flex-direction:column;gap:2px;min-width:0'}, h('span', {class: 'dev-title'}, dv[1]), h('span', {class: 'sub-text'}, dv[2])), h('span', {class: `pill ${dv[4] === 'ok' ? '' : dv[4]}`}, `● ${dv[3]}`)),
     h('div', {class: 'kv-grid'}, ...dv[5].map((r: readonly (string | number)[]) => h('div', {class: 'kv'}, h('span', {class: 'sub-text'}, String(r[0])), h('span', {class: `v${r[2] ? ' mono' : ''}${r[3] ? ` ${r[3]}` : ''}`, title: String(r[1])}, String(r[1]))))));

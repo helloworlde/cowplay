@@ -12,10 +12,18 @@ interface StreamState {
   gain: GainNode;
   sources: Set<AudioBufferSourceNode>;
   active: boolean;
+  minLatency: number;
+  maxLatency: number;
 }
 
 const MIN_LATENCY_SECONDS = 0.12;
 const MAX_LATENCY_SECONDS = 0.35;
+// Music (MainHighAudio, type 102) shares the WebSocket with large video frames; a deeper
+// jitter buffer rides out head-of-line delays where prompts and touch sounds stay short.
+const MEDIA_MIN_LATENCY_SECONDS = 0.25;
+const MEDIA_MAX_LATENCY_SECONDS = 0.75;
+// About 1.4 s of AAC (1024 frames at 48 kHz); a burst larger than this is dropped, not fatal.
+const MAX_DECODE_QUEUE = 64;
 
 /** Decodes and plays CarPlay audio streams (AAC-LC, Opus, LPCM) via Web Audio. */
 export class AudioEngine {
@@ -24,6 +32,8 @@ export class AudioEngine {
   private readonly streams = new Map<number, StreamState>();
   private readonly streamGains = new Map<string, number>();
   private unlocked = false;
+  /** Underruns and dropped late packets since the page loaded, for the viewer metrics. */
+  readonly counters = {underruns: 0, drops: 0};
 
   constructor(private readonly onError: (message: string) => void,private readonly onProgress:(kind:number,timestampUs:number)=>void=()=>{}) {
     this.context = new AudioContext({ latencyHint: 'interactive' });
@@ -53,6 +63,14 @@ export class AudioEngine {
     }
   }
 
+  /** Milliseconds of audio already scheduled ahead of playback, across the active streams. */
+  bufferedMs(): number | undefined {
+    const now = this.context.currentTime;
+    let ahead: number | undefined;
+    for (const state of this.streams.values()) if (state.nextPlayTime > now) ahead = Math.max(ahead ?? 0, (state.nextPlayTime - now) * 1000);
+    return ahead === undefined ? undefined : Math.round(ahead);
+  }
+
   activeStreamNames(): string[] {
     return Array.from(new Set(Array.from(this.streams.values(), (state) => state.name))).sort();
   }
@@ -78,6 +96,8 @@ export class AudioEngine {
       gain: streamGain,
       sources: new Set(),
       active: true,
+      minLatency: message.streamType === 102 ? MEDIA_MIN_LATENCY_SECONDS : MIN_LATENCY_SECONDS,
+      maxLatency: message.streamType === 102 ? MEDIA_MAX_LATENCY_SECONDS : MAX_LATENCY_SECONDS,
     };
     if (message.codec === AudioCodec.AacLc || message.codec === AudioCodec.Opus) {
       if (typeof AudioDecoder === 'undefined') {
@@ -87,18 +107,7 @@ export class AudioEngine {
         this.streams.set(message.streamType, state);
         return;
       }
-      let decoder: AudioDecoder;
       try {
-        decoder = new AudioDecoder({
-          output: (data) => {
-            try {
-              this.playAudioData(state, data);
-            } finally {
-              data.close();
-            }
-          },
-          error: (error) => this.onError(`Audio decoder error: ${error.message}`),
-        });
         const config: AudioDecoderConfig =
           message.codec === AudioCodec.AacLc
             ? {
@@ -112,8 +121,33 @@ export class AudioEngine {
                 sampleRate: message.sampleRate,
                 numberOfChannels: message.channels,
               };
-        decoder.configure(config);
-        state.decoder = decoder;
+        let recovered = false;
+        const createDecoder = (): AudioDecoder => {
+          const decoder = new AudioDecoder({
+            output: (data) => {
+              try {
+                this.playAudioData(state, data);
+              } finally {
+                data.close();
+              }
+            },
+            error: (error) => {
+              if (!state.active || state.decoder !== decoder) return;
+              if (!recovered) {
+                recovered = true;
+                try {
+                  state.decoder = createDecoder();
+                  this.onError(`音频解码异常，已尝试恢复：${error.message}`);
+                  return;
+                } catch { /* Report the original failure and retain the reconnect path. */ }
+              }
+              this.onError(`音频解码已停止，请停止后重新连接：${error.message}`);
+            },
+          });
+          try { decoder.configure(config); } catch (error) { decoder.close(); throw error; }
+          return decoder;
+        };
+        state.decoder = createDecoder();
       } catch (error) {
         this.onError(`Audio decoder rejected ${message.codec === AudioCodec.AacLc ? 'AAC' : 'Opus'}: ${describeError(error)}`);
       }
@@ -125,7 +159,10 @@ export class AudioEngine {
     const state = this.streams.get(message.streamType);
     if (!state) return;
     if (state.decoder) {
-      if (state.decoder.decodeQueueSize >= 16) {this.onError('Audio decoder overloaded; stream stopped');this.closeStream(message.streamType);return;}
+      if (state.decoder.state === 'closed') return;
+      // Queued audio arrives in bursts. Bound the decoder by dropping this packet only; closing
+      // the stream here left the page silent for the rest of the session.
+      if (state.decoder.decodeQueueSize >= MAX_DECODE_QUEUE) {this.counters.drops++;return;}
       try {
         state.decoder.decode(
           new EncodedAudioChunk({
@@ -203,13 +240,16 @@ export class AudioEngine {
   private schedule(state: StreamState, buffer: AudioBuffer,timestampUs:number): void {
     if (!state.active) return;
     const now = this.context.currentTime;
-    if (state.sources.size>=64 || state.nextPlayTime>now+MAX_LATENCY_SECONDS) {
-      for (const source of state.sources) {try {source.onended=null;source.stop();}catch{} source.disconnect();}
-      state.sources.clear();state.nextPlayTime=0;this.onError('Audio backlog reset; playback discontinuity');
+    // Too far ahead: drop only this late burst. Stopping the queued sources here used to cut
+    // the audio that was already playing, which is what the listener heard as stutter.
+    if (state.sources.size>=64 || state.nextPlayTime>now+state.maxLatency) {
+      this.counters.drops++;
+      return;
     }
     // Preserve queued continuity while packets arrive within the remaining buffer.
-    if (state.nextPlayTime <= now || state.nextPlayTime > now + MAX_LATENCY_SECONDS) {
-      state.nextPlayTime = now + MIN_LATENCY_SECONDS;
+    if (state.nextPlayTime <= now) {
+      if(state.nextPlayTime>0)this.counters.underruns++;
+      state.nextPlayTime = now + state.minLatency;
     }
     const source = this.context.createBufferSource();
     source.buffer = buffer;

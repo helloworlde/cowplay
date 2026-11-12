@@ -188,7 +188,7 @@ pub fn cookie_id(headers: &axum::http::HeaderMap) -> Option<String> {
 impl Clients {
     /// In-memory store seeded with `token` when it is a 6-digit number.
     pub fn new(token: &str) -> Self {
-        let token = if valid_token(token) { token.to_owned() } else { random_token().unwrap_or_else(|_| "000000".into()) };
+        let token = if valid_token(token) { token.to_owned() } else { random_token().expect("secure randomness is required for the access code") };
         Self {
             inner: Mutex::new(Inner {
                 dir: None,

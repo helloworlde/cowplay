@@ -344,7 +344,7 @@ fn report_control_connected(ip: IpAddr) {
     d.session_begin("control");
     d.set_peer(ip.to_string(), None);
     d.event("ok", "carplay", format!("iPhone 控制连接 {ip}"));
-    d.link_step("wifi", "ok", format!("iPhone 已通过 Wi‑Fi 连上 F50（{ip}）"));
+    d.link_step("wifi", "ok", format!("iPhone 已通过 Wi‑Fi 连上接收端（{ip}）"));
     d.link_step("carplay", "active", "控制连接已建立，开始鉴权");
 }
 async fn write(socket: &mut TcpStream, bytes: &[u8]) -> io::Result<()> {
@@ -462,11 +462,11 @@ async fn accept_peer(listener: TcpListener, peer: IpAddr) -> io::Result<TcpStrea
 fn auth_failure(stage: &str, error: &str) -> (String, String) {
     match (stage, error) {
         ("PAIR_SETUP", "State") => (
-            "iPhone 请求 CarPlay 配对，但 F50 的配对窗口已关闭".into(),
+            "iPhone 请求 CarPlay 配对，但接收端的配对窗口已关闭".into(),
             "点“连接 iPhone”（蓝牙认证后会自动重新开放 2 分钟）；仍失败请重启服务。".into(),
         ),
         ("PAIR_VERIFY", _) => (
-            "CarPlay 配对验证失败：iPhone 保存的配对与 F50 不一致".into(),
+            "CarPlay 配对验证失败：iPhone 保存的配对与接收端不一致".into(),
             "在 iPhone「设置 › 通用 › CarPlay」中忽略此车，再从手机连接页重新配对。".into(),
         ),
         ("AUTH_SETUP", _) => (
@@ -494,10 +494,23 @@ async fn connection(
     let spec = hub.display_spec().unwrap_or_else(|| credentials.default_spec());
     hub.set_dimensions(spec.width, spec.height).map_err(err)?;
     crate::diag::diag().event("info", "carplay", format!("声明画面 {}×{}@{} · {} · 宽 {} mm", spec.width, spec.height, spec.fps, if spec.hevc { "H.265 可选" } else { "H.264" }, spec.width_mm));
+    let declared_info = credentials.info_for(&spec);
+    if crate::diag::diag().verbose() {
+        if let Ok(value) = bplist::decode(&declared_info) {
+            if let Some(formats) = value.as_dictionary().and_then(|d| d.get("audioFormats")).and_then(Value::as_array) {
+                for row in formats.iter().take(9).filter_map(Value::as_dictionary) {
+                    let name = row.get("audioType").and_then(Value::as_string).unwrap_or("");
+                    if ["compatibility", "default", "media", "alert", "telephony", "speechRecognition"].contains(&name) {
+                        crate::diag_echo!(Debug, "audio", "[DEBUG-audio-route-20261110] declaration microphone={} type={:?} audio_type={name} input={:?} output={:?}",spec.microphone,row.get("type").and_then(Value::as_unsigned_integer),row.get("audioInputFormats").and_then(Value::as_unsigned_integer),row.get("audioOutputFormats").and_then(Value::as_unsigned_integer));
+                    }
+                }
+            }
+        }
+    }
     let mut auth = bounded(AuthControl::new(
         credentials.pairing_id.clone(),
         *credentials.signing_seed,
-        credentials.info_for(&spec),
+        declared_info,
         pair_window.as_millis() as u64,
     ))?;
     let mut decoder = Decoder::default();
@@ -524,6 +537,7 @@ async fn connection(
     let mut info_observations = 0u8;
     let mut tunnel_task: Option<tokio::task::AbortHandle> = None;
     let probe = crate::ultra::enabled().then(||crate::ultra::Probe::with_feed(hub.vehicle.clone()));
+    hub.set_ultra_probe(probe.as_ref());
     let mut probe_tasks = std::collections::BTreeMap::<u8, tokio::task::AbortHandle>::new();
     if probe.is_some() {
         crate::diag::diag().event("info", "ultra", "Ultra只读车辆数据；缺失或过期读数不可用");
@@ -697,24 +711,19 @@ async fn connection(
                                         // Public format/capability metadata only; no IDs, seeds, headers or body.
                                         crate::diag_echo!(Debug, "carplay", "setup type={kind} audio_format={:?} seed_present={} connection_id_present={} seed_signed_negative={} connection_id_signed_negative={}",stream.get("audioFormat").and_then(Value::as_unsigned_integer),stream.contains_key("seed"),stream.contains_key("streamConnectionID"),stream.get("seed").and_then(Value::as_signed_integer).is_some_and(|n|n<0),stream.get("streamConnectionID").and_then(Value::as_signed_integer).is_some_and(|n|n<0));
                                         if (100..=102).contains(&kind) {
-                                            let format =
-                                                bounded(f50_core::audio::Format::from_bits(
-                                                    stream
-                                                        .get("audioFormat")
-                                                        .and_then(Value::as_unsigned_integer)
-                                                        .ok_or_else(|| {
-                                                            err("audio format missing")
-                                                        })?,
-                                                ))?;
+                                            let audio_format = stream.get("audioFormat").and_then(Value::as_unsigned_integer)
+                                                .ok_or_else(|| err("audio format missing"))?;
+                                            let format = bounded(f50_core::audio::Format::from_bits(audio_format))?;
                                             let name = stream
                                                 .get("audioType")
                                                 .and_then(Value::as_string)
                                                 .unwrap_or("default");
-                                            let voice = spec.microphone && kind == 100 && ["telephony", "speechRecognition"].contains(&name);
+                                            let voice = kind == 100 && ["telephony", "speechRecognition"].contains(&name);
                                             let phone_port = stream.get("dataPort").and_then(Value::as_unsigned_integer).unwrap_or(0);
                                             if !(voice || ["compatibility", "default", "alert", "media"].contains(&name))
-                                                || (phone_port != 0 && !voice)
                                                 || phone_port > 65535
+                                                || (spec.microphone && voice && phone_port != 0 &&
+                                                    (format.channels != 1 || !matches!(format.codec, 2 | 3)))
                                             {
                                                 status = 461;
                                             } else {
@@ -737,7 +746,8 @@ async fn connection(
                                                         .await?;
                                                 let data_port = data.local_addr()?.port();
                                                 let control_port = control.local_addr()?.port();
-                                                if voice && phone_port != 0 {
+                                                hub.mic_stop(Some(kind as u8));
+                                                if spec.microphone && voice && phone_port != 0 {
                                                     let input = bounded(derive(
                                                         &**secret,
                                                         format!("DataStream-Salt{id}").as_bytes(),
@@ -750,14 +760,16 @@ async fn connection(
                                                         key: input,
                                                         rate: format.rate,
                                                         channels: format.channels,
+                                                        codec: format.codec,
+                                                        bitrate: (format.codec == 2).then_some(if audio_format & 0x40000000 != 0 { 96_000 } else if audio_format & 0x20000000 != 0 { 64_000 } else { 48_000 }),
                                                     });
                                                 }
-                                                hub.audio_metadata(kind as u8, format.rate, id);
-                                                hub.audio_config(
+                                                let generation = hub.audio_config(
                                                     kind as u8,
                                                     bounded(format.config(kind as u8, name))?,
                                                 )
                                                 .map_err(err)?;
+                                                hub.audio_metadata(kind as u8, format.rate, id);
                                                 if let Some(old) = audio_tasks.remove(&(kind as u8))
                                                 {
                                                     old.abort()
@@ -771,6 +783,7 @@ async fn connection(
                                                         key,
                                                         format,
                                                         kind as u8,
+                                                        generation,
                                                         hub.clone(),
                                                     )),
                                                 );
@@ -1215,15 +1228,37 @@ async fn audio_stream(
     key: [u8; 32],
     format: f50_core::audio::Format,
     kind: u8,
+    generation: u64,
     hub: Arc<Hub>,
 ) -> io::Result<()> {
     let mut decoder = f50_core::audio::Decoder::new(key, format);
     let mut buffer = [0; 4097];
     let mut rtcp = [0; 4097];
     let mut failures = 0u8;
+    // Numeric-only transport probe; no payloads, keys, IDs or absolute RTP times.
+    let mut probe_count=0u64;let mut probe_errors=0u64;let mut probe_replays=0u64;let mut probe_gaps=0u64;
+    let mut probe_seq:Option<u16>=None;let mut probe_sample:Option<u32>=None;
+    let mut probe_min=u32::MAX;let mut probe_max=0u32;
+    let probe_start=std::time::Instant::now();let mut probe_next=Duration::from_secs(5);let mut probe_lines=0;
+    let mut reported_loss=(0,0,0,0);
     loop {
         tokio::select! {
-         packet=data.recv_from(&mut buffer)=>{let(n,source)=packet?;if source.ip()!=peer{continue}match decoder.decode(&buffer[..n],kind){Ok(Some(wire))=>{failures=0;hub.audio_received(kind,u32::from_be_bytes(buffer[4..8].try_into().unwrap()),u64::from_le_bytes(wire[2..10].try_into().unwrap()));hub.audio_packet(wire)},Ok(None)=>{},Err(_)=>{failures+=1;if failures>=8{return Err(err("audio authentication or framing failure limit"))}}}},
+         packet=data.recv_from(&mut buffer)=>{let(n,source)=packet?;if source.ip()!=peer{continue}match decoder.decode(&buffer[..n],kind){Ok(Some(wire))=>{
+             let seq=u16::from_be_bytes(buffer[2..4].try_into().unwrap());let sample=u32::from_be_bytes(buffer[4..8].try_into().unwrap());
+             if let Some(last)=probe_seq {let delta=seq.wrapping_sub(last);if delta>1&&delta<0x8000 {probe_gaps+=u64::from(delta-1);}}
+             if let Some(last)=probe_sample {let delta=sample.wrapping_sub(last);probe_min=probe_min.min(delta);probe_max=probe_max.max(delta);}
+             probe_seq=Some(seq);probe_sample=Some(sample);probe_count+=1;
+             failures=0;hub.audio_packet(generation,sample,wire)
+         },Ok(None)=>{probe_replays+=1},Err(_)=>{probe_errors+=1;failures+=1;if failures>=8{return Err(err("audio authentication or framing failure limit"))}}}
+         // Keep reporting new loss after the initial minute, at most once every five seconds.
+         if probe_start.elapsed()>=probe_next {
+             let loss=(probe_errors,probe_replays,probe_gaps,hub.audio_dropped());
+             if probe_lines<12||loss!=reported_loss {
+                 crate::diag_echo!(Debug,"audio","receive kind={kind} codec={} packets={probe_count} errors={probe_errors} replay_or_late={probe_replays} sequence_gaps={probe_gaps} sample_delta_min={probe_min} sample_delta_max={probe_max} viewer_queue_dropped={} elapsed_ms={}",format.codec,loss.3,probe_start.elapsed().as_millis());
+                 reported_loss=loss;probe_lines+=1;
+             }
+             probe_next=probe_start.elapsed()+Duration::from_secs(5);
+         }},
          packet=control.recv_from(&mut rtcp)=>{let(_,source)=packet?;if source.ip()!=peer{continue} // No RTP retransmission or RTCP clock steering implemented yet.
          }
         }
@@ -1241,20 +1276,18 @@ async fn screen_stream(
     let mut screen = ScreenDecoder::new(key);
     let start = Instant::now();
     let mut configured = false;
+    let mut received_frame = false;
+    let session = crate::diag::diag().session_id();
     let mut body = Vec::new();
     loop {
         let mut header = [0; 128];
-        tokio::time::timeout(Duration::from_secs(15), socket.read_exact(&mut header))
-            .await
-            .map_err(err)??;
+        read_screen_part(&mut socket, &mut header, "header", configured, received_frame, session.as_deref()).await?;
         let n = u32::from_le_bytes(header[..4].try_into().unwrap()) as usize;
         if n > f50_core::media::MAX_MEDIA || (header[4] == 1 && n > 65536) {
             return Err(err("screen payload limit"));
         }
         body.resize(n, 0);
-        tokio::time::timeout(Duration::from_secs(15), socket.read_exact(&mut body))
-            .await
-            .map_err(err)??;
+        read_screen_part(&mut socket, &mut body, "body", configured, received_frame, session.as_deref()).await?;
         match bounded(screen.decode_in_place(&header, &mut body).inspect_err(|e| {
             crate::diag_echo!(Warn, "carplay",
                 "screen_decode={e:?} opcode={} bytes={n}",
@@ -1292,10 +1325,24 @@ async fn screen_stream(
                     return Err(err("video frame before codec configuration"));
                 }
                 hub.publish_reusable(&mut body, start.elapsed().as_micros() as u64);
-                hub.set_status("AUTHENTICATED_VIDEO_RECEIVED; BROWSER_DECODE_NOT_CONFIRMED");
+                received_frame = true;
+                hub.set_status("AUTHENTICATED_VIDEO_RECEIVED");
             }
         }
     }
+}
+async fn read_screen_part(socket: &mut (impl tokio::io::AsyncRead + Unpin), bytes: &mut [u8], stage: &'static str, configured: bool, received_frame: bool, session: Option<&str>) -> io::Result<()> {
+    let result = tokio::time::timeout(Duration::from_secs(15), socket.read_exact(bytes)).await;
+    let error = match result {
+        Ok(Ok(_)) => return Ok(()),
+        Ok(Err(e)) => e,
+        Err(_) => io::Error::new(io::ErrorKind::TimedOut, "15s read deadline elapsed"),
+    };
+    let kind = match error.kind() { io::ErrorKind::TimedOut=>"TimedOut", io::ErrorKind::UnexpectedEof=>"UnexpectedEof", io::ErrorKind::ConnectionReset=>"ConnectionReset", io::ErrorKind::ConnectionAborted=>"ConnectionAborted", io::ErrorKind::BrokenPipe=>"BrokenPipe", _=>"Other" };
+    if let Some(session) = session {
+        crate::diag::diag().transport_failure(session,crate::diag::TransportFailure {ts_ms:crate::diag::now_ms(),stage,kind,expected_bytes:bytes.len(),read_budget_ms:15000,configured,received_frame});
+    }
+    Err(io::Error::new(error.kind(), format!("video-{stage} session={} expected_bytes={} partial_bytes=unknown configured={configured} received_frame={received_frame}: {error}", session.unwrap_or("unknown"), bytes.len())))
 }
 /// `setNightMode` command (PlayPort/DiPlay AirPlaySession.setNightMode).
 fn night_command(night: bool) -> Value {
@@ -1544,6 +1591,13 @@ mod tests {
     }
     #[tokio::test]
     async fn requested_keepalive_port_is_live_and_owned_by_the_control_session() {
+        if std::env::var_os("COWPLAY_KEEPALIVE_TEST_ISOLATED").is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "receiver::tests::requested_keepalive_port_is_live_and_owned_by_the_control_session"])
+                .env("COWPLAY_KEEPALIVE_TEST_ISOLATED", "1").output().unwrap();
+            assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            return;
+        }
         let local: IpAddr = "127.0.0.1".parse().unwrap();
         let phone = UdpSocket::bind(SocketAddr::new(local, 0)).await.unwrap();
         let base = dict([("eventPort", number(12345)), ("timingPort", number(12346))]);
@@ -1604,13 +1658,16 @@ mod tests {
             "https://test.invalid".into(),
         );
         h.viewer.store(true, std::sync::atomic::Ordering::Relaxed);
+        let format = f50_core::audio::Format::from_bits(0x4000).unwrap();
+        let generation = h.audio_config(101, format.config(101, "default").unwrap()).unwrap();
         let task = tokio::spawn(audio_stream(
             data,
             control,
             addr.ip(),
             [7; 32],
-            f50_core::audio::Format::from_bits(0x4000).unwrap(),
+            format,
             101,
+            generation,
             h.clone(),
         ));
         let mut wire = vec![0x80, 96, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -1668,6 +1725,7 @@ mod tests {
         })
         .await
         .unwrap();
+        h.display("rendered");
         let mut control_header = [0; 128];
         control_header[4] = 2;
         client.write_all(&control_header).await.unwrap();
@@ -1685,8 +1743,33 @@ mod tests {
         })
         .await
         .unwrap();
+        assert_eq!(h.observation()["protocol"],"AUTHENTICATED_VIDEO_RECEIVED");
+        assert_eq!(h.observation()["display"],"BROWSER_FRAME_RENDERED");
         drop(client);
         assert!(task.await.unwrap().is_err());
+    }
+    #[tokio::test(start_paused = true)]
+    async fn screen_header_and_body_deadlines_preserve_stage_and_error_kind() {
+        for stage in ["header", "body"] {
+            let (mut input, mut output) = tokio::io::duplex(128);
+            output.write_all(&[1,2]).await.unwrap();
+            let task = tokio::spawn(async move {
+                read_screen_part(&mut input,&mut [0;128],stage,stage=="body",false,None).await.unwrap_err()
+            });
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(14)).await;
+            assert!(!task.is_finished());
+            tokio::time::advance(Duration::from_secs(1)).await;
+            let error=task.await.unwrap();
+            assert_eq!(error.kind(),io::ErrorKind::TimedOut);
+            let text=error.to_string();
+            assert!(text.contains(&format!("video-{stage}")) && text.contains("15s") && text.contains("partial_bytes=unknown"));
+            drop(output);
+        }
+        let (mut input, output) = tokio::io::duplex(128); drop(output);
+        let error=read_screen_part(&mut input,&mut [0;128],"header",false,false,None).await.unwrap_err();
+        assert_eq!(error.kind(),io::ErrorKind::UnexpectedEof);
+        assert!(error.to_string().contains("video-header"));
     }
     #[tokio::test]
     async fn actual_encrypted_hid_event_wire() {

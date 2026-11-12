@@ -64,7 +64,7 @@ impl Link {
         Self::using_adapter(bus, owner, name, &mut stop, adapter).await
     }
     #[cfg(test)]
-    async fn using_bus(bus: Connection, owner: String, name: &str, stop: &mut watch::Receiver<bool>) -> Result<Self> {
+    pub(in crate::tesla_ble) async fn using_bus(bus: Connection, owner: String, name: &str, stop: &mut watch::Receiver<bool>) -> Result<Self> {
         Self::using_adapter(bus, owner, name, stop, 0).await
     }
     async fn using_adapter(bus: Connection, owner: String, name: &str, stop: &mut watch::Receiver<bool>, adapter: u16) -> Result<Self> {

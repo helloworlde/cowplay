@@ -4,6 +4,18 @@ pub mod openwrt;
 
 use std::path::Path;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Host {
+    Openwrt,
+    Linux,
+}
+impl Host {
+    pub fn is_openwrt(self) -> bool {
+        matches!(self, Self::Openwrt)
+    }
+}
+
 #[derive(Clone, Default, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Bluetooth {

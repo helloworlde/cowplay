@@ -42,11 +42,19 @@ async fn call(State(a): State<Arc<Admin>>, UrlPath(method): UrlPath<String>, bod
 pub async fn dispatch(a: &Arc<Admin>, method: &str, args: &Value) -> Result<Value, String> {
     Ok(match method {
         "status" => status(a).await,
-        "tesla_retry"=>{if !a.hub.vehicle.request_retry(){return Err("尚未配置Tesla BLE车辆".into());}json!({"ok":true})},
+        "network_info" => {
+            if !a.openwrt { return Err("无线配置读取仅适用于 OpenWrt".into()); }
+            network_info(&crate::uci::Package::read(Path::new("/etc/config/wireless"))?, &crate::uci::Package::read(Path::new("/etc/config/network"))?, &a.policy().wifi_iface, a.wifi.as_ref().map(|w|w.0.as_str()).unwrap_or(""))?
+        },
+        #[cfg(feature = "tesla")]
+        "tesla_status" | "tesla_configure" | "tesla_connect" | "tesla_disconnect" | "tesla_pair" | "tesla_cancel" | "tesla_retry" | "tesla_climate_pair" | "tesla_climate_query" | "tesla_climate_command" | "tesla_ultra_control" => crate::admin::tesla::dispatch(a, method, args).await?,
+        #[cfg(not(feature = "tesla"))]
+        "tesla_status" => return Err("此构建未启用 Tesla 支持".into()),
         "diag" => json!({"diag": crate::console::diagnosis(a), "stats": crate::console::stats(a), "context":crate::console::connection_context(a)}),
         "mfi_upload" => {
             let _permit = a.ddns_busy.clone().try_acquire_owned().map_err(|_|"证书任务正在进行")?;
-            crate::identity::select_pair(&a.config_path,&a.state_dir,arg(args,"certificate").ok_or("缺少 CarPlay 证书")?,arg(args,"private_key").ok_or("缺少 CarPlay 私钥")?)?;
+            let public=crate::identity::select_pair(&a.config_path,&a.state_dir,arg(args,"certificate").ok_or("缺少 CarPlay 证书")?,arg(args,"private_key").ok_or("缺少 CarPlay 私钥")?)?;
+            *a.pending_public_mfi.lock().unwrap()=Some(vec![public]);
             a.identity_pending.store(true,std::sync::atomic::Ordering::Release);
             diag().event("info","web","已导入第三方 CarPlay 配件身份，等待手动重启 CowPlay");
             json!({"ok":true,"restart_required":true})
@@ -111,8 +119,10 @@ pub async fn dispatch(a: &Arc<Admin>, method: &str, args: &Value) -> Result<Valu
             let q = LogQuery { limit: Some(args.get("limit").and_then(Value::as_u64).unwrap_or(300).min(5000) as usize), level: arg(args, "level").map(str::to_owned), module: arg(args, "module").map(str::to_owned), ..Default::default() };
             let page = diag().logs(&q);
             json!({"entries":page.entries.iter().map(|e|json!({"seq":e.seq,"ts_ms":e.ts_ms,"level":e.level,"module":e.module,"msg":diag::mask_macs(&e.msg)})).collect::<Vec<_>>(),
-                "lines": page.entries.iter().map(|e| diag::mask_macs(&diag::format_line(e))).collect::<Vec<_>>(), "total": page.total,"matched":page.matched})
+                "lines": page.entries.iter().map(|e| diag::mask_macs(&diag::format_line(e))).collect::<Vec<_>>(), "total": page.total,"matched":page.matched,
+                "memory":{"bytes":page.bytes,"cap_bytes":page.cap_bytes,"evicted":page.evicted},"storage":diag().storage_status(),"retention_days":a.policy().log_keep,"persistent_enabled":a.prefs().log.usb,"syslog_mirror":a.prefs().log.syslog,"source":"current_process_ram","limit":q.limit})
         }
+        "logs_export" => a.logs_export().await?,
         "timeline" => {
             let (session, _) = diag().sessions();
             let all = arg(args, "scope") == Some("all");
@@ -121,11 +131,7 @@ pub async fn dispatch(a: &Arc<Admin>, method: &str, args: &Value) -> Result<Valu
         },
         "proc" => json!({"process": a.process(), "config": std::fs::read_to_string(&a.uci_path).unwrap_or_default(), "system": a.system().await}),
         "bundle" => {
-            let mut bundle = a.bundle().await;
-            let context = crate::console::connection_context(a);
-            bundle["connection_check"] = a.connection_check.lock().unwrap().as_ref().filter(|v|v["context"]==context).cloned().unwrap_or(Value::Null);
-            bundle["context"] = context;
-            bound_luci_bundle(bundle)?
+            bound_luci_bundle(a.bundle().await)?
         },
         "selftest" => crate::console::segments(a, None).await,
         "ddns_sync" => json!({"result": a.ddns_update().await?}),
@@ -142,6 +148,25 @@ pub async fn dispatch(a: &Arc<Admin>, method: &str, args: &Value) -> Result<Valu
             json!({"ok": true, "token_set": !t.is_empty()})
         }
         "cert" => cert(a, args).await?,
+        "certificate_export" => {
+            let (name,chain)=match arg(args,"kind") {
+                Some("tls") => ("cowplay-tls-public.pem",a.public_tls.lock().unwrap().clone()),
+                Some("carplay") => ("cowplay-carplay-public.pem",a.public_mfi.lock().unwrap().clone()),
+                _ => return Err("证书种类只支持 tls 或 carplay".into()),
+            };
+            json!({"name":name,"pem":crate::certificates::public_pem(&chain.ok_or("尚无运行中公开证书快照；请核对服务版本与加载状态")?)?,"contains_private_key":false})
+        }
+        "key_export" => {
+            let _permit = a.ddns_busy.clone().try_acquire_owned().map_err(|_| "证书任务正在进行")?;
+            let (name,path,chain,carplay) = match arg(args,"kind") {
+                Some("tls") => ("cowplay-tls-private.pem",std::path::PathBuf::from(&a.tls.lock().unwrap().1),a.public_tls.lock().unwrap().clone(),false),
+                Some("carplay") => ("cowplay-carplay-private.pk8",a.running_mfi_key.lock().unwrap().clone().ok_or("当前没有可导出的 CarPlay 私钥")?,a.public_mfi.lock().unwrap().clone(),true),
+                _ => return Err("私钥种类只支持 tls 或 carplay".into()),
+            };
+            let bytes = zeroize::Zeroizing::new(crate::certificates::export_key(&path,&chain.ok_or("当前没有运行中证书快照")?,carplay)?);
+            let encoded = zeroize::Zeroizing::new(der::pem::encode_string("PRIVATE KEY EXPORT",der::pem::LineEnding::LF,&bytes).map_err(|_|"私钥编码失败")?);
+            json!({"name":name,"data":encoded.lines().filter(|s|!s.starts_with("-----")).collect::<String>()})
+        }
         "cert_upload" => {
             let mut args = args.clone();
             args["action"] = json!("upload");
@@ -173,6 +198,25 @@ pub async fn dispatch(a: &Arc<Admin>, method: &str, args: &Value) -> Result<Valu
     })
 }
 
+fn network_info(wireless: &crate::uci::Package, network: &crate::uci::Package, iface: &str, ssid: &str) -> Result<Value, String> {
+    let aps: Vec<_> = wireless.sections.iter().filter(|s| s.kind == "wifi-iface" && s.get("mode") == Some("ap") && s.get("disabled") != Some("1"))
+        .filter(|s| if iface.is_empty() { s.get("ssid") == Some(ssid) } else { s.name.as_deref() == Some(iface) || s.get("ifname") == Some(iface) }).collect();
+    let [ap] = aps.as_slice() else { return Err("无法唯一定位 CowPlay 热点，请在 Wi-Fi 设置中核对".into()); };
+    let values = |s: &crate::uci::Section, key: &str| -> Vec<String> {
+        match s.options.iter().find(|(k,_)|k == key).map(|(_,v)|v) {
+            Some(crate::uci::Value::Single(v)) => v.split_whitespace().map(str::to_owned).collect(),
+            Some(crate::uci::Value::List(v)) => v.clone(),
+            None => Vec::new(),
+        }
+    };
+    let interfaces: Vec<_> = values(ap, "network").iter().map(|name| {
+        let section = network.section(name);
+        json!({"name":name,"addresses":section.map(|s|values(s,"ipaddr")).unwrap_or_default(),"netmask":section.and_then(|s|s.get("netmask"))})
+    }).collect();
+    let device = ap.get("device").and_then(|name|wireless.section(name));
+    Ok(json!({"ssid":ap.get("ssid"),"channel":device.and_then(|s|s.get("channel")),"htmode":device.and_then(|s|s.get("htmode")),"interfaces":interfaces}))
+}
+
 async fn status(a: &Arc<Admin>) -> Value {
     let stats = crate::console::stats(a);
     let d = crate::console::diagnosis(a);
@@ -200,7 +244,7 @@ async fn status(a: &Arc<Admin>) -> Value {
         "problems": d["problems"],
         "network": net,
         "identity_backed_up": a.state_dir.join(".identity-exported").exists(),
-        "identity": {"loaded":true,"pending_restart":a.identity_pending.load(std::sync::atomic::Ordering::Acquire)},
+        "identity": {"loaded":a.public_mfi.lock().unwrap().is_some(),"pending_restart":a.identity_pending.load(std::sync::atomic::Ordering::Acquire)},
         "log_retention_supported": true,
         "auto_fps_supported": true,
         "automatic_fps_limit": a.auto_fps_limit(),
@@ -261,8 +305,15 @@ async fn cert(a: &Arc<Admin>, args: &Value) -> Result<Value, String> {
     match arg(args, "action").unwrap_or("info") {
         "info" => {
             let (cert, _) = a.tls.lock().unwrap().clone();
-            let info = crate::admin::tls_info(&cert).ok();
-            Ok(json!({"path": cert, "days": info.map(|i| i.0), "chain": info.map(|i| i.1), "rollback": previous.is_file(), "valid":info.map(|_|validate_certificate_dates(Path::new(&cert)).is_ok()), "subject": leaf_names(&cert), "task":a.ddns_state.lock().unwrap().clone(), "dns_provider":a.policy().ddns_provider,"domain":a.prefs().ddns.domain,"token_set":a.token_path().is_file()}))
+            let details=|chain:&Option<Vec<Vec<u8>>>, source:&str|chain.as_deref().map(|chain|{
+                let mut value=crate::certificates::metadata(chain).unwrap_or_else(|e|json!({"error":e}));
+                value["source"]=json!(source); value
+            });
+            let tls=details(&a.public_tls.lock().unwrap(),"running_certificate_snapshot");
+            let value=tls.as_ref().unwrap_or(&Value::Null);
+            let days=value["not_after_ms"].as_u64().map(|end|(i128::from(end)-i128::from(diag::now_ms()))/86_400_000);
+            Ok(json!({"path": cert, "days": days, "chain": value["chain_count"], "rollback": previous.is_file(), "valid":value["date_valid"], "subject": value["dns_names"], "task":a.ddns_state.lock().unwrap().clone(), "dns_provider":a.policy().ddns_provider,"domain":a.prefs().ddns.domain,"token_set":a.token_path().is_file(),
+                "details":tls,"carplay":details(&a.public_mfi.lock().unwrap(),"running_certificate_snapshot"),"pending_carplay":details(&a.pending_public_mfi.lock().unwrap(),"saved_pending_restart")}))
         }
         "upload" => {
             if serde_json::to_vec(&json!({"cert":args["cert"],"key":args["key"]})).map_err(|e|e.to_string())?.len()>49152 {return Err("证书链与私钥合计 JSON 编码后须小于 48 KiB".into());}
@@ -375,6 +426,24 @@ fn dechunk(mut s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn luci_network_facts_include_only_the_selected_hotspot_and_lan_addresses() {
+        let wifi = crate::uci::Package::parse("config wifi-device 'radio1'\n option channel '149'\n option htmode 'VHT80'\n config wifi-iface 'car'\n option mode 'ap'\n option device 'radio1'\n option ssid 'Synthetic-Car'\n option key 'SYNTHETIC-SECRET'\n list network 'lan'\n config wifi-iface 'other'\n option mode 'ap'\n option ssid 'Synthetic-Other'\n option key 'OTHER-SECRET'\n").unwrap();
+        let lan = crate::uci::Package::parse("config interface 'lan'\n list ipaddr '192.0.2.1'\n list ipaddr '198.51.100.1'\n option netmask '255.255.255.0'\n option password 'UNRELATED-SECRET'\n config interface 'wan'\n option username 'UNRELATED-ACCOUNT'\n").unwrap();
+        let facts = super::network_info(&wifi, &lan, "car", "").unwrap();
+        assert_eq!(facts["ssid"], "Synthetic-Car");
+        assert_eq!(facts["channel"], "149");
+        assert_eq!(facts["htmode"], "VHT80");
+        assert_eq!(facts["interfaces"][0]["addresses"], serde_json::json!(["192.0.2.1", "198.51.100.1"]));
+        assert_eq!(facts["interfaces"][0]["netmask"], "255.255.255.0");
+        let text = facts.to_string();
+        for excluded in ["SECRET", "ACCOUNT", "Synthetic-Other", "wan", "key"] { assert!(!text.contains(excluded)); }
+        assert!(super::network_info(&wifi, &lan, "missing", "").is_err());
+        let mut ambiguous = wifi.clone();
+        ambiguous.sections.push(wifi.section("car").unwrap().clone());
+        assert!(super::network_info(&ambiguous, &lan, "car", "").is_err());
+    }
+
     #[tokio::test]
     async fn port_restart_notice_tracks_the_running_listener_across_reloads() {
         let (manager, _server, hub, dir) = crate::bluetooth::recovery_tests::admin_fixture().await;
@@ -425,6 +494,12 @@ mod tests {
         assert_eq!(logs["entries"][0]["msg"], "synthetic newer log", "LuCI and its filtered export must put the newest log first");
         assert!(logs["lines"][0].as_str().unwrap().contains("synthetic newer log"));
         assert!(logs["entries"][0]["seq"].as_u64().unwrap() > logs["entries"][1]["seq"].as_u64().unwrap());
+        let export = super::dispatch(&a, "logs_export", &serde_json::json!({})).await.unwrap();
+        let text = export["text"].as_str().unwrap();
+        assert!(text.starts_with("CowPlay 运行日志\n"));
+        assert!(text.find("synthetic older log").unwrap() < text.find("synthetic newer log").unwrap());
+        assert!(text.contains("WARN") && text.contains("luci_order_test"));
+        assert!(!text.contains("BEGIN PRIVATE KEY"));
         let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let conflict = super::dispatch(&a, "network_check", &serde_json::json!({"port":occupied.local_addr().unwrap().port()})).await.unwrap();
         assert_eq!(conflict["available"],false,"occupied ports must return a report, not prevent saving");

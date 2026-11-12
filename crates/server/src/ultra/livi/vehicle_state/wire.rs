@@ -36,14 +36,14 @@ pub(super) fn wrap(inner: &Value) -> Vec<u8> {
 pub(super) fn to_plist(v: &Value) -> bplist::Value {
     match v {
         Value::Null => bplist::Value::Data(Vec::new()),
-        Value::Bool(b) => bplist::Value::Bool(*b),
-        Value::Int(n) => bplist::Value::Int(u64::try_from(*n).unwrap_or(0)),
+        Value::Bool(b) => bplist::Value::Boolean(*b),
+        Value::Int(n) => bplist::number(u64::try_from(*n).unwrap_or(0)),
         Value::Real(f) => bplist::Value::Real(*f),
         Value::String(s) => bplist::Value::String(s.clone()),
         Value::Data(d) => bplist::Value::Data(d.clone()),
         Value::Uuid(u) => bplist::Value::Data(u.to_vec()),
         Value::Array(items) => bplist::Value::Array(items.iter().map(to_plist).collect()),
-        Value::Dict(entries) => bplist::Value::Dict(
+        Value::Dict(entries) => bplist::Value::Dictionary(
             entries
                 .iter()
                 .map(|(k, v)| {

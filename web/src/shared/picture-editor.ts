@@ -1,4 +1,4 @@
-import {h} from './dom';
+import {h, radioKeys} from './dom';
 import type {DisplayLimits, ScreenPrefs, Spec, WindowInfo} from './api';
 import './picture-editor.css';
 
@@ -54,14 +54,14 @@ export class PictureEditor {
   };
   const size=dimensions??(r?[Math.floor(r.rw*r.dpr/2)*2,Math.floor(r.rh*r.dpr/2)*2]:[1280,720]);
   const advanced=h('details',{class:'picture-advanced',open:this.advancedOpen,ontoggle:(e:Event)=>{const el=e.currentTarget as HTMLDetailsElement;if(el.isConnected)this.advancedOpen=el.open;}},
-   h('summary',{},h('span',{},'更多设置'),h('span',{class:'picture-advanced-value'},`${p.ui_size==='small'?'小':p.ui_size==='large'?'大':'标准'}控件 · ${p.right_hand_drive?'右舵':'左舵'}`)),
+   h('summary',{id:`${prefix}-advanced`},h('span',{},'更多设置'),h('span',{class:'picture-advanced-value'},`${p.ui_size==='small'?'小':p.ui_size==='large'?'大':'标准'}控件 · ${p.right_hand_drive?'右舵':'左舵'}`)),
    h('div',{class:'picture-advanced-body'},h('h2',{},'CarPlay 布局'),h('div',{class:'picture-fields picture-layout-fields'},
     field('ui-size','CarPlay 控件大小',p.ui_size,[['small','小'],['std','标准'],['large','大']],v=>edit({ui_size:v as ScreenPrefs['ui_size']})),
     field('rhd','CarPlay 驾驶位',String(p.right_hand_drive??false),[['false','左舵'],['true','右舵']],v=>edit({right_hand_drive:v==='true'}))),
     h('div',{class:'picture-advanced-slot'}),
     h('p',{class:'picture-note'},c.hevc==='remote'?'编码能力以车机浏览器为准，实际画质以 iPhone 返回为准。':'H.265 需 iPhone 与浏览器共同支持；没有画面时可恢复兼容画质。')));
   return h('div',{id:`${prefix}-controls`,class:'picture-editor picture-controls','data-owner':c.owner},
-   h('div',{class:'picture-presets',role:'radiogroup','aria-label':'画质档位'},...([['auto','自动'],['smooth','流畅'],['sharp','清晰'],['custom','自定义']] as const).map(([v,t])=>h('button',{type:'button',role:'radio','aria-checked':String(p.quality===v),disabled:busy,onclick:()=>edit({quality:v,...(v==='custom'?{}:{resolution:v==='sharp'?'1.5x':'native',fps:v==='smooth'?30:60,codec:'h264'})})},t))),
+   h('div',{class:'picture-presets',role:'radiogroup','aria-label':'画质档位',onkeydown:radioKeys},...([['auto','自动'],['smooth','流畅'],['sharp','清晰'],['custom','自定义']] as const).map(([v,t])=>h('button',{type:'button',id:`${prefix}-preset-${v}`,role:'radio',tabindex:p.quality===v?0:-1,'aria-checked':String(p.quality===v),disabled:busy,onclick:()=>edit({quality:v,...(v==='custom'?{}:{resolution:v==='sharp'?'1.5x':'native',fps:v==='smooth'?30:60,codec:'h264'})})},t))),
    h('p',{class:'picture-preset-hint'},p.quality==='auto'?'跟随屏幕尺寸，优先兼容':p.quality==='smooth'?'降低帧率，减少设备负载':p.quality==='sharp'?'以屏幕 1.5 倍尺寸请求画面':'分别设置尺寸、帧率与编码'),
    p.quality==='custom'?h('div',{class:'picture-fields'},
     field('resolution','分辨率',p.quality==='custom'?p.resolution:p.quality==='sharp'?'1.5x':'native',options,v=>custom({resolution:(v==='custom'?`${size[0]}x${size[1]}`:v) as ScreenPrefs['resolution']}),!caps),
@@ -75,7 +75,7 @@ export class PictureEditor {
    !valid?h('p',{class:'picture-error',role:'status'},'宽高必须是接收端范围内的偶数，请重新填写。'):null,
    h('p',{id:`${prefix}-error`,class:`picture-feedback ${c.error?'picture-error':'picture-note'}`,role:'status'},c.error||this.notice),
    h('div',{class:'picture-apply-row'},h('button',{type:'button',id:`${prefix}-apply`,class:'picture-apply',disabled:busy||!dirty||!valid||(p.codec==='hevc'&&p.quality==='custom'&&c.hevc===false),onclick:()=>{const current=this.draft??c.prefs;void submit(Object.fromEntries(keys.filter(k=>current[k]!==c.prefs[k]).map(k=>[k,current[k]])));}},c.busy?'正在保存…':this.saving?'等待确认…':'应用画面设置'),
-    dirty?h('button',{type:'button',class:'picture-text-button',disabled:busy,onclick:()=>{this.draft=null;this.notice='';c.render();}},'撤销修改'):null,
+    dirty?h('button',{type:'button',id:`${prefix}-undo`,class:'picture-text-button',disabled:busy,onclick:()=>{this.draft=null;this.notice='';c.render();}},'撤销修改'):null,
     h('button',{type:'button',id:`${prefix}-reset`,class:'picture-reset',title:'恢复 720p / 30 帧 / H.264',disabled:busy,onclick:()=>void submit({quality:'custom',resolution:'720p',fps:30,codec:'h264'})},'恢复兼容画质')),
    h('p',{class:'picture-note'},'应用后 iPhone 会短暂重连，配对保留。'),advanced);
  }

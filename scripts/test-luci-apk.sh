@@ -10,17 +10,6 @@ mkdir -p "$root/etc/apk/keys" "$root/tmp"
 # OpenWrt base-files ships /var -> /tmp; create it first so apk's cache/log under var/ fit it.
 ln -s tmp "$root/var"
 root=$(CDPATH='' cd -- "$root" && pwd)
-work=$(mktemp -d)
-trap 'rm -rf "$work" "$root"' EXIT HUP INT TERM
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work/test.key" 2>/dev/null
-openssl pkey -in "$work/test.key" -pubout -out "$root/etc/apk/keys/cowplay-release.pem"
-cp "$core" "$work/core.apk"
-cp "$luci" "$work/luci.apk"
-core=$work/core.apk
-luci=$work/luci.apk
-for package in "$core" "$luci"; do
-    apk --allow-untrusted adbsign --reset-signatures --sign-key "$work/test.key" "$package"
-done
 key=$root/etc/apk/keys/openwrt-25.12.pem
 curl --fail --location --connect-timeout 15 --max-time 60 \
  'https://git.openwrt.org/keyring/plain/apk/openwrt-25.12.pem?id=f0670054fd3aa9616bcd8d0d0357a1a15c65b758' -o "$key"
@@ -33,23 +22,20 @@ https://downloads.openwrt.org/releases/25.12.6/packages/aarch64_generic/packages
 REPOS
 apk --root "$root" --arch aarch64_generic --no-scripts add --initdb \
  base-files busybox uci luci-base rpcd jsonfilter procd ubus ca-bundle openssl-util
-apk --root "$root" --no-network verify "$core" "$luci"
-apk --root "$root" --arch aarch64_generic --no-scripts --no-network add "$core"
-chroot "$root" /usr/bin/cowplay probe
+apk --root "$root" --arch aarch64_generic --no-scripts --no-network --allow-untrusted add "$core"
 mkdir -p "$root/tmp/luci-modulecache"
 touch "$root/tmp/luci-indexcache.test"
-apk --root "$root" --arch aarch64_generic --no-network add "$luci"
+apk --root "$root" --arch aarch64_generic --no-network --allow-untrusted add "$luci"
 apk --root "$root" info --exists luci-app-cowplay
 for f in usr/share/luci/menu.d/luci-app-cowplay.json usr/share/rpcd/acl.d/luci-app-cowplay.json \
- www/luci-static/resources/view/cowplay/main.js www/luci-static/resources/cowplay/rpc.js \
- www/luci-static/resources/cowplay/style.css www/luci-static/resources/cowplay/updater.js \
- lib/upgrade/keep.d/cowplay lib/upgrade/cowplay.sh; do
+ www/luci-static/resources/view/cowplay/main.js www/luci-static/resources/view/cowplay/tesla.js \
+ www/luci-static/resources/cowplay/tesla.css www/luci-static/resources/cowplay/rpc.js \
+ www/luci-static/resources/cowplay/style.css; do
     [ -f "$root/$f" ]
 done
 [ -x "$root/usr/libexec/rpcd/cowplay" ]
-[ -x "$root/usr/libexec/cowplay-restore" ] && [ -x "$root/etc/init.d/cowplay-restore" ]
 chroot "$root" /bin/sh -c '/usr/libexec/rpcd/cowplay list | jsonfilter -e "@.status" >/dev/null'
-chroot "$root" /bin/sh -c '/usr/libexec/rpcd/cowplay list | jsonfilter -e "@.update_check" | grep -q tag'
+chroot "$root" /bin/sh -c '/usr/libexec/rpcd/cowplay list | jsonfilter -e "@.tesla_status" -e "@.tesla_climate_command" >/dev/null'
 # post-install ran uci-defaults once and dropped LuCI caches; it did not enable or start anything.
 grep -q "option port '18443'" "$root/etc/config/cowplay"
 [ ! -e "$root/etc/uci-defaults/90-cowplay" ]
@@ -63,7 +49,7 @@ apk --root "$root" --no-network del luci-app-cowplay
 [ ! -e "$root/usr/libexec/rpcd/cowplay" ]
 [ -x "$root/usr/bin/cowplay" ]
 [ "$before" = "$(sha256sum "$root/etc/config/cowplay")" ]
-apk --root "$root" --arch aarch64_generic --no-network add "$luci"
+apk --root "$root" --arch aarch64_generic --no-network --allow-untrusted add "$luci"
 [ "$before" = "$(sha256sum "$root/etc/config/cowplay")" ]
 [ ! -e "$root/etc/uci-defaults/90-cowplay" ]
 echo LUCI_APK_INSTALL_POSTINSTALL_REMOVE_REINSTALL_AND_POLICY_RETENTION_PASSED

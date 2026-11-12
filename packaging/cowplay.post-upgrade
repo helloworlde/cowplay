@@ -6,5 +6,3 @@ if [ -f /var/run/cowplay-upgrade-running ]; then
     rm -f /var/run/cowplay-upgrade-running
     /etc/init.d/cowplay start
 fi
-
-[ ! -x /etc/init.d/cowplay-restore ] || /etc/init.d/cowplay-restore enable

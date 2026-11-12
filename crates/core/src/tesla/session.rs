@@ -1,11 +1,12 @@
 use super::{
-    Category, Error, Result, Update, decode_state,
+    climate, decode_state,
     proto::{self, Message},
+    Category, ClimateCommand, ClimateState, Error, Result, Update,
 };
 use p256::{
-    PublicKey, SecretKey,
     elliptic_curve::sec1::ToEncodedPoint,
     pkcs8::{DecodePrivateKey, EncodePrivateKey},
+    PublicKey, SecretKey,
 };
 use rand_core::{OsRng, RngCore};
 use ring::{aead, hmac};
@@ -14,6 +15,11 @@ use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 pub struct Identity(SecretKey);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrollmentPermission {
+    VehicleMonitor,
+    Driver,
+}
 impl Identity {
     pub fn generate() -> Self {
         Self(SecretKey::random(&mut OsRng))
@@ -39,8 +45,15 @@ impl Identity {
     /// Enrollment request with Tesla's Vehicle Monitor role (read access, no owner/driver grant).
     /// This request still requires the vehicle owner's physical NFC/UI confirmation.
     pub fn enrollment_request(&self) -> Vec<u8> {
+        self.enrollment_request_for(EnrollmentPermission::VehicleMonitor)
+    }
+    pub fn enrollment_request_for(&self, permission: EnrollmentPermission) -> Vec<u8> {
+        let role = match permission {
+            EnrollmentPermission::VehicleMonitor => 5,
+            EnrollmentPermission::Driver => 3,
+        };
         let mut permission = proto::nested(1, &proto::nested(1, &self.public_key()));
-        proto::int(4, 5, &mut permission);
+        proto::int(4, role, &mut permission);
         let mut whitelist = proto::nested(5, &permission);
         proto::bytes(6, &[], &mut whitelist);
         let unsigned = proto::nested(16, &whitelist);
@@ -116,9 +129,15 @@ struct Session {
 struct Pending {
     uuid: [u8; 16],
     since: Instant,
-    category: Option<Category>,
+    request: Option<Request>,
     request_id: Vec<u8>,
     last_response: Option<u32>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Request {
+    Read(Category),
+    ClimateQuery,
+    ClimateCommand,
 }
 pub struct Client {
     vin: String,
@@ -170,7 +189,7 @@ impl Client {
         self.pending = Some(Pending {
             uuid,
             since: Instant::now(),
-            category: None,
+            request: None,
             request_id: Vec::new(),
             last_response: None,
         });
@@ -198,7 +217,7 @@ impl Client {
             return Ok(false);
         }
         let p = self.pending.as_ref().ok_or(Error::State)?;
-        if p.category.is_some() {
+        if p.request.is_some() {
             return Err(Error::State);
         }
         if p.since.elapsed() > Duration::from_secs(4) {
@@ -264,10 +283,20 @@ impl Client {
     }
     /// Retire a failed/cancelled query without reusing its UUID or resetting the session counter.
     pub fn cancel_query(&mut self) {
-        if self.pending.as_ref().is_some_and(|p| p.category.is_some()) { self.pending = None; }
+        if self.pending.as_ref().is_some_and(|p| p.request.is_some()) {
+            self.pending = None;
+        }
     }
-    /// Only the two GetState queries can be emitted; there is no generic vehicle command API.
     pub fn query(&mut self, category: Category) -> Result<Vec<u8>> {
+        self.request(Request::Read(category), &category.payload())
+    }
+    pub fn climate_query(&mut self) -> Result<Vec<u8>> {
+        self.request(Request::ClimateQuery, &climate::query())
+    }
+    pub fn climate_command(&mut self, command: ClimateCommand) -> Result<Vec<u8>> {
+        self.request(Request::ClimateCommand, &command.payload()?)
+    }
+    fn request(&mut self, request: Request, payload: &[u8]) -> Result<Vec<u8>> {
         if self.pending.is_some() {
             return Err(Error::State);
         }
@@ -281,7 +310,7 @@ impl Client {
             .ok_or(Error::Expired)?;
         let nonce = random();
         let aad = command_aad(self.vin.as_bytes(), &s.epoch, expires, s.counter);
-        let (encrypted, tag) = seal(&s.key[..], nonce, &aad, &category.payload())?;
+        let (encrypted, tag) = seal(&s.key[..], nonce, &aad, payload)?;
         let mut auth = Vec::new();
         proto::bytes(1, &s.epoch, &mut auth);
         proto::bytes(2, &nonce, &mut auth);
@@ -300,19 +329,46 @@ impl Client {
         self.pending = Some(Pending {
             uuid,
             since: Instant::now(),
-            category: Some(category),
+            request: Some(request),
             request_id,
             last_response: None,
         });
         Ok(message)
     }
     pub fn accept_response(&mut self, wire: &[u8], received_ms: u64) -> Result<Option<Update>> {
+        let category = self.pending.as_ref().and_then(|p| match p.request {
+            Some(Request::Read(category)) => Some(category),
+            _ => None,
+        });
+        self.accept_payload(wire, category.map(Request::Read))?
+            .map(|bytes| decode_state(category.ok_or(Error::State)?, &bytes, received_ms))
+            .transpose()
+    }
+    pub fn accept_climate_response(&mut self, wire: &[u8]) -> Result<Option<ClimateState>> {
+        self.accept_payload(wire, Some(Request::ClimateQuery))?
+            .map(|bytes| climate::decode(&bytes))
+            .transpose()
+    }
+    pub fn accept_climate_ack(&mut self, wire: &[u8]) -> Result<bool> {
+        let Some(bytes) = self.accept_payload(wire, Some(Request::ClimateCommand))? else {
+            return Ok(false);
+        };
+        climate::ack(&bytes)?;
+        Ok(true)
+    }
+    fn accept_payload(
+        &mut self,
+        wire: &[u8],
+        expected: Option<Request>,
+    ) -> Result<Option<Vec<u8>>> {
         let m = Message::parse(wire)?;
         if !self.matches(&m)? {
             return Ok(None);
         }
         let p = self.pending.as_ref().ok_or(Error::State)?;
-        let category = p.category.ok_or(Error::State)?;
+        if p.request.is_none() || p.request != expected {
+            return Err(Error::State);
+        }
         if p.since.elapsed() > Duration::from_secs(5) {
             self.pending = None;
             return Err(Error::Expired);
@@ -437,7 +493,7 @@ impl Client {
         if operation != 0 {
             return Err(Error::Rejected);
         }
-        Ok(Some(decode_state(category, bytes, received_ms)?))
+        Ok(Some(bytes.to_vec()))
     }
 }
 

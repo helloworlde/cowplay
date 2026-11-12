@@ -1,5 +1,6 @@
+import {receiverName} from '../shared/receiver';
 import {confirmAction,cancelConfirmation,preferenceChanges,preferencePrompt,commandPrompt,stateContext} from '../shared/confirmation';
-import {$, clear, h} from '../shared/dom';
+import {$, clear, h, icon} from '../shared/dom';
 import {ApiError, admit, api, authStatus, download, getDiag, getState, getStats, pairingAdapterName, pairStage, recentLinkError, runSegments, saveError, sendCmd, setPrefs, targetPhone, type PairStage, type ScreenPrefs} from '../shared/api';
 import {mmss} from '../shared/fmt';
 import {browserName, toast} from '../car/ui';
@@ -26,6 +27,7 @@ function clearSegments():void{pendingTest=null;app.busy=false;app.segments=null;
 function segmentContext():string{const s=app.state;return JSON.stringify([authEpoch,s?.me.id,s?.current_phone,targetPhone(s)?.id,s?.session?.id,s?.viewer?.id,s?.hub.phone,s?.pairing.generation,s?.pairing.device]);}
 function accessChanged():void{cancelConfirmation();authEpoch++;uiEpoch++;refreshEpoch++;pendingCommands.clear();pendingPrefs=null;writingPrefs=false;app.prefsBusy=false;pendingPolicy=null;app.policyBusy=false;resetPairCancel();hideToken();clearSegments();}
 let pairingAvailable = false;
+let panelTrigger: HTMLElement | null = null;
 const pairingConfirmation = new PairingConfirmation(h('section', {class: 'code-card'}), 'phone-',
   body => api('/api/pairing/confirm', {body}), poll, undefined, () => app.authorized ? app.state?.me.id ?? '' : '');
 const nearbyPhones = new NearbyPhones(poll, render, () => app.authorized ? app.state?.me.id ?? '' : '');
@@ -33,7 +35,7 @@ const debug=new ConnectionDebug(()=>app.authorized?app.state?.me.id??'':'');
 const brandIcon=new URL('../shared/cowplay-icon.png',import.meta.url).href;
 const names = {status: 'CowPlay', iphones: 'iPhone', diag: '诊断', log: '日志', settings: '设置'};
 const pages = {status, iphones, diag: diagnose, log: logs, settings};
-const nav = [['status', '状态', '◉'], ['iphones', 'iPhone', '▯'], ['diag', '诊断', '✚'], ['settings', '设置', '⚙']] as const;
+const nav = [['status', '状态', 'monitor'], ['iphones', 'iPhone', 'phone'], ['diag', '诊断', 'activity'], ['settings', '设置', 'sliders']] as const;
 
 function route(): void {
   uiEpoch++;cancelConfirmation();
@@ -59,9 +61,9 @@ function render(): void {
     app.error ? h('p', {class: 'error', role: 'alert'}, app.error) : null,
     ...(app.state ? pages[app.page](actions) : [foot('正在读取设备状态…')]), app.state&&(app.page==='status'||app.page==='iphones')?debug.update(app.state):null);
   $('tabs').hidden = false;
-  clear($('tabs'), ...nav.map(([id, title, glyph]) => h('button', {type: 'button', 'aria-label': title, 'aria-current': (app.page === id || (app.page === 'log' && id === 'diag')) ? 'page' : 'false', onclick: () => { location.hash = id; }}, h('span', {class: 'tab-icon', 'aria-hidden': 'true'}, glyph), h('span', {}, title))));
+  clear($('tabs'), ...nav.map(([id, title, glyph]) => h('button', {type: 'button', id: `phone-tab-${id}`, 'aria-label': title, 'aria-current': (app.page === id || (app.page === 'log' && id === 'diag')) ? 'page' : 'false', onclick: () => { location.hash = id; }}, icon(glyph, 22), h('span', {}, title))));
   renderOverlay();
-  if (focused?.isConnected && focused !== document.body) focused.focus({preventScroll: true});
+  if (focused?.isConnected && focused !== document.body && (!app.sheet || $('overlay').contains(focused))) focused.focus({preventScroll: true});
   window.scrollTo(0, keep);
   document.documentElement.dataset.ready = 'true';
 }
@@ -177,7 +179,7 @@ const actions: Actions = {
     finally{if(request===tokenRequest){app.tokenBusy=false;render();}}
   },
 };
-function closePanel():void{uiEpoch++;cancelConfirmation();resetPairCancel();pictureEditor.reset();app.sheet=null;app.remove=null;unlocked=false;render();}
+function closePanel():void{uiEpoch++;cancelConfirmation();resetPairCancel();pictureEditor.reset();app.sheet=null;app.remove=null;unlocked=false;render();const target=panelTrigger?.isConnected?panelTrigger:panelTrigger?.id?document.getElementById(panelTrigger.id):null;target?.focus({preventScroll:true});panelTrigger=null;}
 async function cancelPairing(closePanelAfter:boolean):Promise<void>{
   if(app.pairCancelBusy||!app.state||!app.authorized)return;
   const token={},source=uiContext(),access=authEpoch,owner=app.state.me.id,generation=app.state.pairing.generation;
@@ -206,9 +208,17 @@ async function exportFile(path:string,notice:string):Promise<void>{
 }
 async function exportLogs():Promise<void>{await exportFile('/api/logs/download','日志已导出');}
 function modal(title: string, content: (Node | null)[], close = actions.close, closeLabel='取消', closing=false): void {
+  if (!$('overlay').querySelector('.bottom-sheet')) panelTrigger = document.activeElement as HTMLElement | null;
   const dim = h('button', {type: 'button', class: 'dim', 'aria-label': '关闭面板', disabled:closing, onclick: close});
-  const sheet = h('section', {class: 'bottom-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': title}, h('span', {class: 'grabber'}), h('div', {class: 'sheet-head'}, h('h2', {}, title), h('button', {type: 'button', disabled:closing, onclick: close}, closeLabel)), ...content);
+  const sheet = h('section', {class: 'bottom-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': title}, h('span', {class: 'grabber'}), h('div', {class: 'sheet-head'}, h('h2', {}, title), h('button', {type: 'button', id:'phone-panel-close', disabled:closing, onclick: close}, closeLabel)), ...content);
+  sheet.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const targets = [...sheet.querySelectorAll<HTMLElement>('button,input,select,textarea,a[href],summary,[tabindex]')].filter(el => el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length);
+    const first = targets[0], last = targets.at(-1);
+    if ((e.shiftKey && document.activeElement === first) || (!e.shiftKey && document.activeElement === last)) { e.preventDefault(); (e.shiftKey ? last : first)?.focus(); }
+  });
   clear($('overlay'), dim, sheet);
+  if (!sheet.contains(document.activeElement) && !document.querySelector('.action-confirmation[open]')) sheet.querySelector<HTMLElement>('button:not(:disabled)')?.focus({preventScroll:true});
 }
 function renderOverlay(): void {
   if (unlocked && !app.sheet) return;
@@ -226,7 +236,7 @@ function renderOverlay(): void {
       app.pairCancelError?h('p',{class:'error',role:'alert'},app.pairCancelError):null,
       stage === 'code' ? pairingConfirmation.element : null,
       (stage === 'waiting' || (stage === 'start' && p.pairing_error)) ? nearbyPhones.view(p, {header: p.discovering && name ? `正在扫描 · 在列表里点新 iPhone，或在它的蓝牙里点“${name}”` : undefined}) : null,
-      stage === 'connecting' || stage === 'connected' ? null : group(...[['在新 iPhone 上打开蓝牙和 Wi‑Fi', '保持在车内、靠近 F50'], [name ? `打开 设置 › 蓝牙，点“${name}”` : '蓝牙名称暂时未知', name ? '也可以在上面的列表里点这台 iPhone' : '可在附近列表中点这台 iPhone；展开日志查看名称读取错误'], ['确认配对码并点“配对”', '再点“使用 CarPlay”即完成']].map(([title, sub], i) => h('div', {class: 'row add-step'}, h('span', {class: 'add-number'}, String(i + 1)), text(title, sub)))),
+      stage === 'connecting' || stage === 'connected' ? null : group(...[['在新 iPhone 上打开蓝牙和 Wi‑Fi', '保持靠近接收端'], [name ? `打开 设置 › 蓝牙，点“${name}”` : '蓝牙名称暂时未知', name ? '也可以在上面的列表里点这台 iPhone' : '可在附近列表中点这台 iPhone；展开日志查看名称读取错误'], ['确认配对码并点“配对”', '再点“使用 CarPlay”即完成']].map(([title, sub], i) => h('div', {class: 'row add-step'}, h('span', {class: 'add-number'}, String(i + 1)), text(title, sub)))),
       stage === 'failed' ? button('重新连接', async () => { await actions.cmd('connect', p.device ?? undefined); }) : null,
       stage === 'start' ? button('重新开始配对', () => void actions.cmd('openPairWindow')) : null,
       stage === 'connected' ? button('完成', actions.close) : null,
@@ -248,7 +258,7 @@ function renderOverlay(): void {
   }
 }
 const PAIR_TEXT: Record<PairStage, [string, string]> = {
-  start: ['连接你的 iPhone', '这台 iPhone 会通过蓝牙和 Wi‑Fi 连上车里的 F50，大约 20 秒。'],
+  start: ['连接你的 iPhone', '通过蓝牙和 Wi‑Fi 连接 {receiver}，按提示确认配对和 CarPlay。'],
   waiting: ['在蓝牙里点“{name}”', '打开 设置 › 蓝牙，在“其他设备”里点“{name}”。出现配对码后，核对车机屏幕或回到这里。'],
   code: ['确认配对码', '数字一致就在 iPhone 弹窗里点“配对”，并在这里确认。'],
   finishing: ['正在完成配对', '两边都已确认，正在保存配对，完成后自动连接 CarPlay。'],
@@ -264,11 +274,11 @@ function renderPair(): void {
   const err = stage === 'failed' ? recentLinkError(s) : null;
   const other = stage === 'start' && s.hub.phone ? s.phones?.find(x => x.current)?.name ?? '另一台 iPhone' : null;
   const bonded = stage === 'connecting' || stage === 'failed' || stage === 'connected';
-  const steps: [string, string][] = [['已连上 F50 热点', `${s.network.ssid ?? 'F50 热点'} · 保持当前连接`],
+  const steps: [string, string][] = [['已连上 CarPlay 热点', `${s.network.ssid ?? 'CarPlay 热点'} · 保持当前连接`],
     ['在 iPhone 上确认配对', bonded ? '配对已保存' : stage === 'code' ? '蓝牙弹窗显示与车机相同的 6 位数字' : stage === 'finishing' ? '正在保存配对…' : name ? `打开 设置 › 蓝牙，点“${name}”` : '蓝牙名称暂时未知，可在附近列表中选择 iPhone'],
     ['开始使用 CarPlay', stage === 'connected' ? 'CarPlay 已连接' : stage === 'connecting' ? '点“使用 CarPlay”，画面会出现在车机屏幕上' : '画面会出现在车机屏幕上']];
   const doneSteps = stage === 'connected' ? 3 : bonded ? 2 : 1;
-  const [title, lead] = stage === 'waiting' && !name ? ['蓝牙名称暂时未知', '请展开日志与调试信息查看名称读取错误。也可以在下面的附近列表中选择要配对的 iPhone。'] : PAIR_TEXT[stage].map(x => x.replaceAll('{name}', name ?? ''));
+  const [title, lead] = stage === 'waiting' && !name ? ['蓝牙名称暂时未知', '请展开日志与调试信息查看名称读取错误。也可以在下面的附近列表中选择要配对的 iPhone。'] : PAIR_TEXT[stage].map(x => x.replaceAll('{name}', name ?? '').replaceAll('{receiver}', receiverName(s)));
   const open = () => void actions.cmd('openPairWindow');
   const start = h('button',{type:'button',class:'primary',onclick:open},'开始配对');
   const wait = (text: string, clock = true) => h('div', {class: 'wait'}, h('i', {class: 'spinner', 'aria-hidden': 'true'}), text, clock && p.remaining_s != null ? h('span', {class: 'mono'}, mmss(p.remaining_s)) : null);

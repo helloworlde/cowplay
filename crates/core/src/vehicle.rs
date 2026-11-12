@@ -1,4 +1,27 @@
 //! Vehicle readings shared by protocol adapters and presentation transports.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClimateCommand {
+    Power { on: bool },
+    SetTemperature { driver_celsius: f32, passenger_celsius: f32 },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct ClimateState {
+    pub hvac_on: Option<bool>,
+    pub inside_temp_celsius: Option<f32>,
+    pub outside_temp_celsius: Option<f32>,
+    pub driver_temp_celsius: Option<f32>,
+    pub passenger_temp_celsius: Option<f32>,
+    pub min_temp_celsius: Option<f32>,
+    pub max_temp_celsius: Option<f32>,
+    pub sampled_ms: Option<u64>,
+}
+impl ClimateState {
+    pub fn fresh(&self, received_ms: u64, now: u64) -> bool {
+        now.saturating_sub(received_ms) <= 30_000 && self.sampled_ms.is_some_and(|t| t <= now.saturating_add(5000) && now.saturating_sub(t) <= 30_000)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     Charge,

@@ -20,7 +20,7 @@ let now = 0, tick, closed = false;
 const sent = [], context = vm.createContext({performance: {now: () => now}, setInterval: fn => {tick = fn;}, clearTimeout() {}, WebSocket: {OPEN: 1},
   socket: {readyState: 1, bufferedAmount: 8192, send: data => sent.push(JSON.parse(data)), close: () => {closed = true;}},
   app: {channel: true, local: {rttMs: null, jitterMs: null, lossPct: null}}, mic: {stop() {}}, deadline: 0,
-  document: {visibilityState: 'visible'}, player: {}, audio: {}, bufferS: null,
+  document: {visibilityState: 'visible'}, player: {}, audio: {bufferedMs: () => 0, counters: {underruns: 0, drops: 0}}, bufferS: null,
   st: {fps: 60, decodeMs: null, decoded: 5, dropped: 0, intervals: [], decoder: 'synthetic'}, failed: () => assert.fail('unexpected channel failure')});
 const run = code => vm.runInContext(ts.transpileModule(code, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
 run(declarations.join('\n'));

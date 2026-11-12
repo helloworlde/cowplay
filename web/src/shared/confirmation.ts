@@ -18,7 +18,7 @@ export function confirmAction(options:Confirmation):Promise<boolean>{
    h('div',{class:'confirmation-actions'},cancel,accept));
   dialog.addEventListener('keydown',event=>event.stopPropagation());dialog.addEventListener('keyup',event=>event.stopPropagation());
   const watch=options.current?window.setInterval(()=>{if(!options.current!())dialog.close('cancel');},100):0;
-  dialog.addEventListener('close',()=>{clearInterval(watch);const approved=dialog.returnValue==='confirm';if(active===dialog)active=null;dialog.remove();if(previous?.isConnected)previous.focus({preventScroll:true});resolve(approved);},{once:true});
+  dialog.addEventListener('close',()=>{clearInterval(watch);const approved=dialog.returnValue==='confirm';if(active===dialog)active=null;dialog.remove();const target=previous?.isConnected?previous:previous?.id?document.getElementById(previous.id):null;target?.focus({preventScroll:true});resolve(approved);},{once:true});
   active=dialog;document.body.append(dialog);dialog.showModal();cancel.focus({preventScroll:true});
  });
 }

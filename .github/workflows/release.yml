@@ -54,14 +54,29 @@ jobs:
           PY
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-            test "$GITHUB_REF_NAME" = "v$(cat packaging/VERSION)"
+            version=$(cat packaging/VERSION)
+            test "$GITHUB_REF_NAME" = "v${version%-r0}"
           fi
       - name: Build and check frontend
         run: |
           npm ci --prefix web
           npm run build --prefix web
-          make test-web
+          node scripts/test-frame-progress.mjs
+          node scripts/test-viewer-ping.mjs
+          node scripts/test-video-resolution.mjs
           for file in $(find luci-app-cowplay/htdocs -name '*.js'); do node --check "$file"; done
+      - name: Test actual browser navigation, authorization and updates
+        if: matrix.arch == 'x86_64'
+        env:
+          CHROME_BIN: google-chrome
+          LUCI_RUNTIME_DIR: target/luci-runtime
+        run: |
+          python3 scripts/prepare-luci-test-runtime.py target/luci-runtime
+          node scripts/test-car-access-web.mjs
+          node scripts/test-tesla-navigation-web.mjs
+          node scripts/test-updater-luci.mjs
+          node scripts/test-tesla-management-web.mjs
+          node scripts/test-viewer-web.mjs
       - name: Build native static Linux archive
         env:
           LINUX_ARCH: ${{ matrix.arch }}
@@ -207,6 +222,7 @@ jobs:
           unset RELEASE_SIGNING_KEY
           actual=$(openssl pkey -in "$key" -pubout | sha256sum | cut -d ' ' -f 1)
           test "$actual" = "$EXPECTED_PUBLIC_KEY_SHA256"
+          test "$actual" = "$(sha256sum packaging/release-key.pem | cut -d ' ' -f 1)"
           version=$(cat packaging/VERSION)
           python3 scripts/prepare-github-release.py --policy packaging/release-policy.json \
             --core "target/apk/cowplay-$version.apk" --luci "target/apk/luci-app-cowplay-$version.apk" \

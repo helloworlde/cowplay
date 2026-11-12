@@ -35,12 +35,30 @@ export function fitCanvas(): void {
 }
 
 // ---------- rail ----------
+let lastClimateFeedback = '', climateNoticeUntil = 0;
 export function renderRail(): void {
   const stalled = !!app.stall || (app.everRendered && !app.rendered);
-  $<HTMLButtonElement>('r-home').disabled = !app.channel || !app.rendered || app.stopped;
+  for (const id of ['r-siri','r-back','r-home']) $<HTMLButtonElement>(id).disabled = !app.channel || !app.rendered || app.stopped;
   $('r-sheet').setAttribute('aria-pressed', String(app.sheet));
   document.body.classList.toggle('stalled', stalled);
   $('h-dot').className = 'sdot' + (stalled ? ' warn' : '');
+  const s = app.state, ultra = s?.hub.ultra;
+  const status = $('climate-status');
+  const feedback = ultra?.climate_control.feedback;
+  const feedbackKey = feedback ? `${feedback.at_ms}/${feedback.sequence}` : '';
+  if (feedback?.sequence && feedbackKey !== lastClimateFeedback) {
+    lastClimateFeedback = feedbackKey;
+    if (feedback.age_ms < 5000) {
+      status.textContent = feedback.message;
+      climateNoticeUntil = performance.now() + 4000;
+    }
+  }
+  let visible = false;
+  if (app.view === 'session' && app.channel && app.rendered && !app.stopped && !app.sheet
+      && s?.hub.verified && s.hub.phone && ultra?.enabled && ultra.channels.some(Boolean)) {
+    visible = performance.now() < climateNoticeUntil;
+  }
+  status.hidden = !visible;
 }
 
 // ---------- debug info ----------
@@ -96,13 +114,11 @@ export function renderStats(l: Local): void {
     [0, '媒体流量', `本页累计 ${(l.bytes/1024).toFixed(1)} KiB · 本窗口 ${kb===undefined?'采样中':`${kb.toFixed(1)} KiB`}`, spark(history.kb, '#CCCCCC')],
     [1, '末次收帧 / 绘制', `${age(l.arrivalAgeMs)} / ${age(l.paintAgeMs)}`],
     [1, '解码队列', l.queueFrames === null ? '未配置解码器' : `${l.queueFrames} 帧${l.queueFrames===0?'（无积压）':''}`, spark(history.buffer, '#2BA640')],
-    [0, '端到端延迟', '未测量：缺采集时间与浏览器时钟映射'],
-    [1, '浏览器 ↔ F50', `RTT ${num(app.local.rttMs, 0, ' ms')} · 波动 ${num(app.local.jitterMs, 0, ' ms')}`],
-    [0, 'F50 收流', server&&f50?`${num(server.fps_in, 1, ' fps')} · ${num(server.bitrate_bps/1000, 1, ' Kbps')} / 队列丢弃 ${server.dropped} 帧`:dash],
-    [0, 'F50 ↔ iPhone', `时钟探测 RTT ${num(server?.phone_rtt_ms, 1, ' ms')} · 末帧 ${age(server?.since_last_frame_ms ?? null)}`],
+    [1, '浏览器 ↔ 接收端', `RTT ${num(app.local.rttMs, 0, ' ms')} · 波动 ${num(app.local.jitterMs, 0, ' ms')}`],
+    [0, '接收端收流', server&&f50?`${num(server.fps_in, 1, ' fps')} · ${num(server.bitrate_bps/1000, 1, ' Kbps')} / 队列丢弃 ${server.dropped} 帧`:dash],
     [0, '车机浏览器', `${browserName()} · ${w}x${hh} · ${document.visibilityState === 'visible' ? '前台' : '后台'}`],
-    [1, 'F50 CPU / 温度 / 内存', f50?`${num(f50.cpu, 0, '%')} / ${num(f50.temp, 0, '°C')} / ${num(f50.mem_free_mb, 0, ' MB')} 可用`:app.statsError||'等待 F50 新采样'],
-    [0, 'F50 Wi‑Fi / 上行', `${wifi?.channel ? `CH${wifi.channel}` : dash}${wifi?.width_mhz ? ` ${wifi.width_mhz}MHz` : ''} · ${wifi?.clients ?? dash} 台 / ${f50?.uplink ?? dash}`],
+    [1, '主机 CPU / 温度 / 内存', f50?`${num(f50.cpu, 0, '%')} / ${num(f50.temp, 0, '°C')} / ${num(f50.mem_free_mb, 0, ' MB')} 可用`:app.statsError||'等待主机新采样'],
+    [0, '主机 Wi‑Fi / 上行', `${wifi?.channel ? `CH${wifi.channel}` : dash}${wifi?.width_mhz ? ` ${wifi.width_mhz}MHz` : ''} · ${wifi?.clients ?? dash} 台 / ${f50?.uplink ?? dash}`],
     [1, 'iPhone Wi‑Fi / iAP2', `${phone} / ${ph?.bt ?? dash}`],
     [0, 'iPhone 型号 / 系统', phoneModel(s)],
     [0, '页面 / 服务构建', `${BUILD_ID} / ${app.state?.build ?? dash}`],
@@ -121,7 +137,7 @@ export function renderStall(retries: number, stallMs: number): void {
   const waited = st ? (now - since) / 1000 : 0;
   const exhausted = app.channelError || (st && st.attempts >= retries && now - st.lastTry >= stallMs);
   $('stall-title').textContent = exhausted ? '自动恢复未成功，请手动重连' : st ? '画面停住了，正在自动恢复' : app.channel ? '投屏通道已连接，正在恢复画面' : '连接中断了，正在自动恢复';
-  $('stall-cause').textContent = st ? `原因：${st.cause} · 第 ${Math.max(1, st.attempts)} / ${retries} 次` : app.channel ? '等待新的画面，配对保留。' : '原因：车机与 F50 的连接中断 · 正在重连';
+  $('stall-cause').textContent = st ? `原因：${st.cause} · 第 ${Math.max(1, st.attempts)} / ${retries} 次` : app.channel ? '等待新的画面，配对保留。' : '原因：车机与接收端的连接中断 · 正在重连';
   $('stall-time').textContent = st ? `${waited.toFixed(1)} 秒` : '';
   $('stall-bar').style.width = st ? `${Math.min(100, Math.round(((st.attempts - 1) + Math.min(1, (now - st.lastTry) / stallMs)) / retries * 100))}%` : '40%';
 }
@@ -142,17 +158,19 @@ export function renderSheet(a: SessionActions): void {
     phonesKey=nextPhonesKey;
   }
   if(!$('sheet-input').childElementCount){
-    for(const [action,title] of [['back','返回'],['select','选择'],['siri','Siri'],['previous','上一首'],['play','播放 / 暂停'],['next','下一首']])$('sheet-input').append(h('button',{type:'button',onclick:()=>a.control(action)},title));
+    for(const [action,title] of [['previous','上一首'],['play','播放 / 暂停'],['next','下一首'],['select','选择']])$('sheet-input').append(h('button',{type:'button','data-action':action,onclick:()=>a.control(action)},title));
   }
   renderPictureSettings(a);
   const audioBox=$('sheet-audio');if(!audioBox.querySelector('button:active')&&!audioBox.contains(document.activeElement))audioBox.replaceChildren(a.audioControls());
   const nextTogglesKey=JSON.stringify([s.me.id,p.night,p.call,p.debug,app.prefsSaving]);
   if(nextTogglesKey!==togglesKey){
   clear($('sheet-toggles'),
-    switchRow('trow', 'CarPlay 夜间外观', '深色地图与界面', p.night, () => a.setPrefs({night: !p.night})),
-    switchRow('trow', '用这块屏幕的麦克风', '关闭时通话走车机蓝牙', p.call === 'web', () => a.setPrefs({call: p.call === 'web' ? 'bt' : 'web'})),
-    switchRow('trow', '调试信息', '右上角显示画面、车机、F50、iPhone 数据', p.debug, () => a.setPrefs({debug: !p.debug})));
-    for(const button of $('sheet-toggles').querySelectorAll('button'))button.disabled=app.prefsSaving;
+    switchRow('trow', 'CarPlay 夜间外观', '深色地图与界面', p.night, () => a.setPrefs({night: !p.night})));
+  clear($('sheet-call'),
+    switchRow('trow', '用这块屏幕的麦克风', '关闭时通话走车机蓝牙；变更会重连', p.call === 'web', () => a.setPrefs({call: p.call === 'web' ? 'bt' : 'web'})));
+  clear($('sheet-debug'),
+    switchRow('trow', '调试信息', '右上角显示画面、车机、接收端、iPhone 数据', p.debug, () => a.setPrefs({debug: !p.debug})));
+    for(const button of $('sheet').querySelectorAll<HTMLButtonElement>('[role=switch]'))button.disabled=app.prefsSaving;
     togglesKey=nextTogglesKey;
   }
 }

@@ -1,4 +1,4 @@
-//! Minimal read-only subset of Tesla's protobuf wire format. Unknown fields are skipped.
+//! Minimal subset of Tesla's protobuf wire format. Unknown fields are skipped.
 use super::{Error, Result};
 #[derive(Clone, Copy)]
 pub enum Value<'a> {

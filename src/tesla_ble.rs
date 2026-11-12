@@ -26,6 +26,8 @@ mod gatt;
 pub use gatt::{GattReport, observe_gatt};
 pub mod transport;
 pub mod worker;
+pub mod management;
+mod climate;
 
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct AdapterState {
