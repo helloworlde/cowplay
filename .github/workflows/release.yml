@@ -44,7 +44,8 @@ jobs:
           from pathlib import Path
           p = json.loads(Path('packaging/release-policy.json').read_text())
           assert p['repository'] == 'helloworlde/cowplay'
-          assert p['openwrt_releases'] and p['upgrade_from']
+          assert p['channel'] in ['stable', 'dev']
+          assert p['openwrt_releases'] and isinstance(p['upgrade_from'], list)
           assert all(re.fullmatch(r'\d+\.\d+\.\d+', v) for v in p['openwrt_releases'])
           assert all(re.fullmatch(r'\d+\.\d+\.\d+-r\d+', v) for v in p['upgrade_from'])
           front = Path('web/src/build.ts').read_text()
@@ -74,14 +75,6 @@ jobs:
         run: |
           command -v "$CHROME_BIN"
           readlink -f "$(command -v "$CHROME_BIN")"
-          python3 - <<'PYCODE'
-          import os, pathlib, shutil
-          p = pathlib.Path(shutil.which(os.environ['CHROME_BIN']))
-          data = p.read_bytes()
-          print('Chrome executable:', p.resolve())
-          if data.startswith(b'#!'):
-              print('\n'.join(data.decode().splitlines()[:30]))
-          PYCODE
           timeout 15s "$CHROME_BIN" --version
           python3 scripts/prepare-luci-test-runtime.py target/luci-runtime
           node scripts/test-access-setup-web.mjs
@@ -128,19 +121,22 @@ jobs:
               apk add --no-cache openssl python3 curl >/dev/null
               python3 scripts/test-package-lifecycle.py
               python3 scripts/test-sysupgrade-restore.py
+              python3 scripts/test-release-artifacts.py
             '
           make test-apk TARGET_DIR=target/linux
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: cowplay-linux-${{ matrix.arch }}
-          path: target/linux-dist/*.tar.gz
+          path: target/linux-dist/cowplay-*-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: matrix.arch == 'arm64'
         with:
           name: cowplay-apk
-          path: target/apk/*.apk
+          path: |
+            target/apk/cowplay-*.apk
+            target/apk/luci-app-cowplay-*.apk
           if-no-files-found: error
           retention-days: 7
   verify-release:
@@ -183,7 +179,7 @@ jobs:
             --core "target/apk/cowplay-$version.apk" --luci "target/apk/luci-app-cowplay-$version.apk" \
             --linux-x86_64 "target/linux-dist/cowplay-$version-linux-x86_64.tar.gz" \
             --linux-arm64 "target/linux-dist/cowplay-$version-linux-arm64.tar.gz" \
-            --sign-key "$key" --apk "$RUNNER_TEMP/apk" --output target/test-release-assets
+            --sign-key "$key" --apk "$RUNNER_TEMP/apk" --output target/test-release-assets --notes target/test-release-notes.md
           cd target/test-release-assets
           openssl dgst -sha256 -verify release-key.pem -signature SHA256SUMS.sig SHA256SUMS
           sha256sum -c SHA256SUMS
@@ -242,7 +238,7 @@ jobs:
             --core "target/apk/cowplay-$version.apk" --luci "target/apk/luci-app-cowplay-$version.apk" \
             --linux-x86_64 "target/linux-dist/cowplay-$version-linux-x86_64.tar.gz" \
             --linux-arm64 "target/linux-dist/cowplay-$version-linux-arm64.tar.gz" \
-            --sign-key "$key" --apk "$RUNNER_TEMP/apk" --output target/release-assets
+            --sign-key "$key" --apk "$RUNNER_TEMP/apk" --output target/release-assets --notes target/release-notes.md
       - name: Upload, download-verify and publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -250,12 +246,19 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
+          channel=$(python3 -c 'import json; print(json.load(open("packaging/release-policy.json"))["channel"])')
+          case "$channel" in
+            dev) prerelease=true; latest=false ;;
+            stable) prerelease=false; latest=true ;;
+            *) echo 'Invalid release channel' >&2; exit 1 ;;
+          esac
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft > "$RUNNER_TEMP/release.json"; then
             python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["isDraft"], "Published releases cannot be overwritten"' "$RUNNER_TEMP/release.json"
             gh release upload "$tag" --repo "$GITHUB_REPOSITORY" target/release-assets/* --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file target/release-notes.md --prerelease="$prerelease" --latest=false
           else
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
-              --title "$tag" --generate-notes target/release-assets/*
+              --title "CowPlay $tag" --prerelease="$prerelease" --latest=false --notes-file target/release-notes.md target/release-assets/*
           fi
           downloaded="$RUNNER_TEMP/downloaded-release"
           mkdir "$downloaded"
@@ -265,4 +268,4 @@ jobs:
           openssl dgst -sha256 -verify target/release-assets/release-key.pem \
             -signature "$downloaded/SHA256SUMS.sig" "$downloaded/SHA256SUMS"
           (cd "$downloaded" && sha256sum -c SHA256SUMS)
-          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease="$prerelease" --latest="$latest"

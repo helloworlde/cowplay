@@ -1,42 +1,143 @@
+<p align="center">
+  <img src="docs/media/cowplay.png" width="100" alt="CowPlay" />
+</p>
+
 # CowPlay
 
-Rust 无线 CarPlay 接收端，主要面向安装 MU300 OpenWrt 的中兴 F50，同时提供 Linux x86_64、Linux ARM64／64 位树莓派支持。TypeScript/Vite 网页嵌入静态 Rust 程序。Based on LIVI by Lasse Heitgres (https://github.com/f-io/LIVI).
+**把无线 CarPlay 带到车机浏览器。**
 
-实现包含 BlueZ Agent1/Profile1、有界手机配对与切换、RFCOMM/iAP2、认证与 Wi-Fi 交接、RTSP/媒体、HTTPS/WSS，以及手机、车机、LuCI 管理页。Tesla BLE 提供电量、续航、胎压和空调读数；车辆命令需车主单独授权，未连接时不会发送。Ultra、音频、实际手机／车机兼容及长期稳定性仍需实机验收。
+CowPlay 在独立接收端运行，通过无线连接接收 iPhone 画面，让车机浏览器成为 CarPlay 的显示与触控入口。打开网页、连接手机，即可使用熟悉的 CarPlay 界面。
 
-项目不提供配件身份、私钥、证书、手机配对或厂商固件。使用者须合法持有配件身份，自行配置可信 HTTPS 证书、蓝牙适配器与无线热点。F50 USB 不具备主机能力，不支持有线 CarPlay。
+主要面向中兴 F50 / MU300 OpenWrt，也提供 Linux x86_64 和 ARM64 安装包。
 
-## 下载与安装
+> **开发预发布**：当前版本用于测试与反馈，尚未达到正式版验收标准。[下载预发布](https://github.com/helloworlde/cowplay/releases) · [支持范围与验证边界](docs/STATUS.md)
 
-正式附件发布在 [GitHub Releases](https://github.com/helloworlde/cowplay/releases)。首个正式版本为 `v0.0.1`。F50 在仓库公开且可访问 GitHub 后自行下载；首次覆盖安装见 [LuCI 安装步骤](docs/INSTALL-OPENWRT.md)。
+## 核心能力
 
-| 系统 | 安装材料 | 说明 |
+- **无线 CarPlay**：蓝牙配对后通过 Wi-Fi 传送画面，浏览器负责显示与触控回传。
+- **手机管理**：保存多部 iPhone 的独立配对，连接、切换、断开；一次使用一部手机。
+- **画面设置**：按屏幕调整分辨率、帧率、布局和外观，提供断线后的恢复入口。
+- **设备管理**：车机与手机页面配合后台管理，处理访问授权、证书、状态和脱敏诊断。
+- **Tesla 与 CarPlay Ultra**：车辆状态接入原生 Ultra 通道，提供受授权的空调控制。
+- **签名更新**：开发版与正式版使用独立渠道，安装前验证签名、架构及状态格式，保留配置与配对。
+
+## Tesla 与 CarPlay Ultra
+
+通过 Tesla BLE 读取电量、额定续航、四轮胎压和空调状态，并将车辆数据提供给 CarPlay Ultra 原生界面。未连接、缺失或过期的读数保持未知。
+
+当前车辆控制范围为**空调开关与双区温度**。只读监控和车辆控制分别授权；控制需要车主独立授权，并在本次 CarPlay 会话中明确允许。Ultra、实车兼容和控制效果仍处于开发验证阶段，详见 [项目状态](docs/STATUS.md)。
+
+## 界面
+
+**连接状态**：从网页连接到手机认证、Wi-Fi、CarPlay 和画面，逐步显示进度。
+
+![CowPlay 车机连接页面，演示数据](docs/media/connection.png)
+
+**画面与手机管理**：车机上调整画面，手机上管理连接。
+
+<p>
+  <img src="docs/media/picture.png" width="76%" alt="CowPlay 画面设置，演示数据" />
+  <img src="docs/media/phone.png" width="22%" alt="CowPlay 手机连接管理，演示数据" />
+</p>
+
+*以上为 CowPlay 实际网页界面，使用合成演示数据；不是实车或真实 CarPlay 媒体验收截图。*
+
+## 安装
+
+从 [Releases](https://github.com/helloworlde/cowplay/releases) 选择平台与渠道。当前开发包标为 **Pre-release**；正式渠道不会自动采用开发版。
+
+| 平台 | 安装材料 | 指南 |
 | --- | --- | --- |
-| OpenWrt aarch64_generic | 同版本签名 cowplay、luci-app-cowplay APK | [公钥导入、首次安装、LuCI 更新和系统升级恢复](docs/RELEASES.md) |
-| Linux x86_64 | cowplay-版本-linux-x86_64.tar.gz | [签名下载、安装和升级](docs/LINUX.md) |
-| Linux ARM64／64 位树莓派 | cowplay-版本-linux-arm64.tar.gz | [签名下载、安装和升级](docs/LINUX.md) |
+| F50 / MU300 OpenWrt | 同版本的 `cowplay` 与 `luci-app-cowplay` 两个 APK | [安装与配置](docs/INSTALL-OPENWRT.md) |
+| Linux x86_64 | `cowplay-…-linux-x86_64.tar.gz` | [Linux 安装](docs/LINUX.md) |
+| Linux ARM64 / 64 位树莓派 | `cowplay-…-linux-arm64.tar.gz` | [Linux 安装](docs/LINUX.md) |
 
-当前安装包版本为 `0.0.2-r0`。OpenWrt 发布策略仅声明 `25.12.6`、`aarch64_generic`，其他固件必须单独验证。F50 使用厂商 5.4 内核，不能安装官方 6.12 内核模块。OpenWrt 包自带私有 BlueZ/D-Bus 和 musl 用户态依赖，不替换系统驱动、固件或蓝牙服务。
+安装前核对发布公钥指纹、签名和 SHA-256。接收端需要蓝牙、已配置的 Wi-Fi 热点、可信 HTTPS 证书，以及使用者合法持有的配件身份。项目不附带私人身份、配对资料或厂商固件。
 
-首次安装 OpenWrt 核心包开启下次开机自启，但不立即启动；配置完整后由管理员显式启动。Linux 安装器首次只安装程序和可选 systemd unit，不启用、不启动。升级保留配置、私有状态和原运行／自启选择。签名、公钥指纹核验和兼容性检查不可省略。
+### 下载与验签（两平台通用）
 
-## 配置与连接
+需要 `wget`、OpenSSL 和 `sha256sum`。以下安装首个开发预发布 `v0.0.1`，先在新建临时目录下载并核验：
 
-- F50 配置结构见 `packaging/config.example.json`；Linux 见 `packaging/config.linux.example.json`。示例地址、域名、VIN、身份和密码均为占位值。
-- Linux 必须显式设置 `bluetooth.kind=system`，并提供支持 BR/EDR、RFCOMM 的专用适配器及系统 BlueZ/D-Bus。详见 [Linux 兼容配置](docs/LINUX.md)。
-- 私有配置、身份、证书和配对保存在设备本地。私有目录使用 `0700`，私钥与配置使用 `0600`；不要上传至本仓库、Issues、Actions artifacts 或 Release。
-- 首次打开全新 CowPlay 时可设置六位访问码，也可明确选择不设置，无需先登录管理页。选择随接收端保存，重启／升级不变。启用访问码后，新浏览器及免码进入过的浏览器需验证一次，此前已验证的身份保留；不设置时，能打开地址的设备可直接进入投屏和手机管理。LuCI“设备与访问”或受保护的 Linux 管理页可设置、重置、停用。二维码只打开页面，手机配对与屏幕偏好保留。
-- F50 的 `/admin` 转至 LuCI；Linux 独立管理页需要单独管理令牌。车机页面为 `/`，手机配对页为 `/pairing`。地址需与可信证书及 Origin 配置匹配。
+```sh
+set -eu
+umask 077
+work=$(mktemp -d)
+cd "$work"
+version=0.0.1-r0
+base=https://github.com/helloworlde/cowplay/releases/download/v0.0.1
+for file in release-key.pem SHA256SUMS SHA256SUMS.sig; do
+  wget -O "$file" "$base/$file"
+done
+printf '%s  release-key.pem\n' '5f926239adc2029a33ed58c6e7e2107dcc424fb7e8133cdbdcb777e5f1a8b40f' | sha256sum -c -
+openssl dgst -sha256 -verify release-key.pem -signature SHA256SUMS.sig SHA256SUMS
+```
 
-新手机先在 `/pairing` 打开配对窗口，在 iPhone 蓝牙设置选择 CowPlay，核对两端六码并确认，然后连接 CarPlay。已保存手机可选择连接或切换，一次连接一部手机。取消或断开不删除既有配对。
+### OpenWrt / F50
 
-F50 停服使用 `/etc/init.d/cowplay stop`；`apk del cowplay` 保留私有状态。升级失败后检查事务记录和备份，不直接覆盖旧程序或私有状态进行降级。本版不自动启用系统升级恢复服务；`sysupgrade -n` 和任意厂商刷机不保证保留应用，详见发布说明。
+以管理员身份完成上述验签，再下载并安装同版本双包。发布公钥放入 APK 信任目录；[安装指南](docs/INSTALL-OPENWRT.md)包含配置与 LuCI 入口。
 
-Tesla 入口：车机“设置 → Tesla 车辆”；LuCI“服务 → CowPlay”页内的“Tesla 车辆”。直接路径为 `/cgi-bin/luci/admin/services/cowplay/tesla`。Linux 主机使用 `/manage#tesla-management`。没有配置时不扫描、不连接车辆。只读监控与车辆控制分别使用本地密钥和车内授权，密钥与 VIN 留在设备。协议来源见 `research/tesla-ble-lock.json`、`NOTICE.md`。
+```sh
+core=cowplay-$version-aarch64_generic.apk
+luci=luci-app-cowplay-$version-noarch.apk
+wget -O "$core" "$base/$core"
+wget -O "$luci" "$base/$luci"
+awk -v a="$core" -v b="$luci" '
+  NF != 2 || length($1) != 64 || $1 ~ /[^0-9a-f]/ { bad=1 }
+  $2 == a { if (first++) bad=1; print }
+  $2 == b { if (second++) bad=1; print }
+  END { if (bad || first != 1 || second != 1) exit 1 }
+' SHA256SUMS > APK-SHA256SUMS
+sha256sum -c APK-SHA256SUMS
+apk --keys-dir . verify "./$core" "./$luci"
+mkdir -p /etc/apk/keys
+cp release-key.pem /etc/apk/keys/cowplay-release.pem
+apk add "./$core" "./$luci"
+cowplay update-bootstrap
+mkdir -p /etc/cowplay/state
+chmod 700 /etc/cowplay/state
+cowplay init-access /etc/cowplay/state
+```
 
-## 构建与验证
+`init-access` 仅在全新安装时执行一次，拒绝覆盖已有访问状态。随后按指南配置身份、热点和 HTTPS，再启动服务。
 
-使用锁文件约束 Rust 和 npm 依赖。先构建前端，再编译 Rust，保证嵌入资源与源码一致。
+### Linux x86_64 / ARM64
+
+完成上述验签后，选择当前主机架构并安装。安装器不自动启用或启动服务；运行配置见 [Linux 指南](docs/LINUX.md)。
+
+```sh
+case "$(uname -m)" in
+  x86_64) arch=x86_64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo 'Unsupported architecture' >&2; exit 1 ;;
+esac
+file=cowplay-$version-linux-$arch.tar.gz
+wget -O "$file" "$base/$file"
+awk -v name="$file" '
+  NF != 2 || length($1) != 64 || $1 ~ /[^0-9a-f]/ { bad=1 }
+  $2 == name { if (found++) bad=1; print }
+  END { if (bad || found != 1) exit 1 }
+' SHA256SUMS > LINUX-SHA256SUMS
+sha256sum -c LINUX-SHA256SUMS
+tar -xzf "$file"
+cd "cowplay-$version-linux-$arch"
+sudo sh ./install.sh
+```
+
+## 开始使用
+
+1. 按平台指南安装并完成配置，启动 CowPlay。
+2. 在车机打开 CowPlay 地址，按首次使用提示设置访问方式。
+3. 在手机打开 `/pairing`，配对 iPhone，核对两端配对码，然后连接 CarPlay。
+
+车机入口为 `/`，手机入口为 `/pairing`。已保存手机可直接选择连接；取消或断开保留配对。[设备管理与更新](docs/RELEASES.md)说明正式／开发渠道选择、签名验证及失败恢复。
+
+## 当前边界
+
+F50 是主要适配目标；Linux／树莓派的完整无线链路仍待验收。真实音频、双手机切换、Ultra／车辆控制和长期稳定性仍在验证，详见 [项目状态](docs/STATUS.md)。F50 不支持有线 CarPlay。
+
+## 开发
+
+Rust workspace 与 TypeScript/Vite 使用锁定依赖。先构建网页，再编译接收端：
 
 ```sh
 npm ci --prefix web
@@ -45,29 +146,10 @@ cargo build --release --locked
 cargo test --workspace --locked
 ```
 
-`make help` 列出全部入口：
+`make help` 列出打包和回归入口。[架构](docs/ARCHITECTURE.md) · [构建、签名与发布](docs/RELEASES.md) · [网络与证书](docs/NETWORK.md)
 
-| 命令 | 用途 |
-| --- | --- |
-| `make build` | 原生 ARM64 Alpine 容器构建静态程序、私有 BlueZ 运行时与双 APK |
-| `make linux-tar LINUX_ARCH=x86_64 LINUX_BINARY=target/release/cowplay` | 打包对应架构静态 ELF；ARM64 使用 LINUX_ARCH=arm64 |
-| `make test` | Rust、前端逻辑及包生命周期回归（需相应 APK/OpenSSL 工具） |
+## 许可与致谢
 
-GitHub Actions 在 main、PR 和手动触发时使用对应架构原生 runner 构建 OpenWrt、Linux x86_64、Linux ARM64，运行相关测试并上传候选产物。生产发布仅在匹配版本的标签推送后执行，使用专用发布密钥。Environment Secret、公钥指纹和完整流程见 [发布说明](docs/RELEASES.md)。未签名候选产物不能用于正式分发。
+GPL-3.0-only，见 [LICENSE](LICENSE) 和 [NOTICE.md](NOTICE.md)。
 
-```sh
-python3 scripts/test-package-lifecycle.py
-python3 scripts/test-sysupgrade-restore.py
-python3 scripts/test-linux-install.py
-python3 scripts/test-linux-download.py
-# 原生 ARM64 Linux、APK v3、OpenSSL 环境：
-python3 scripts/test-release-artifacts.py
-```
-
-测试使用一次性目录与明确合成数据，不操作真实设备。真实蓝牙、热点、iPhone、会话、媒体绘制、触控、音频和断电／固件升级须分别验收。
-
-## 源码与许可
-
-[架构说明](docs/ARCHITECTURE.md) 描述协议、平台、管理和车辆 Feed；[网络端口说明](docs/NETWORK.md) 描述监听和防火墙要求。
-
-项目为 GPL-3.0-only。第三方归属、固定源码版本与运行时许可见 `NOTICE.md`、`research/*lock.json`、`packaging/RUNTIME-NOTICE.md` 及包内许可文件。Release 附件仅包含程序、公开配置示例、安装材料、公钥与签名，不包含开发设备记录或私人资料。
+Based on LIVI by Lasse Heitgres (https://github.com/f-io/LIVI).

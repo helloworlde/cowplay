@@ -27,6 +27,9 @@ mkdir -p "$root/tmp/luci-modulecache"
 touch "$root/tmp/luci-indexcache.test"
 apk --root "$root" --arch aarch64_generic --no-network --allow-untrusted add "$luci"
 apk --root "$root" info --exists luci-app-cowplay
+for notice in LICENSE NOTICE.md RUNTIME-NOTICE.md TESLA-PROTOCOL-LICENSE LIVI-NOTICE; do
+    [ -s "$root/usr/share/cowplay/$notice" ]
+done
 for f in usr/share/luci/menu.d/luci-app-cowplay.json usr/share/rpcd/acl.d/luci-app-cowplay.json \
  www/luci-static/resources/view/cowplay/main.js www/luci-static/resources/view/cowplay/tesla.js \
  www/luci-static/resources/cowplay/tesla.css www/luci-static/resources/cowplay/rpc.js \
@@ -35,6 +38,7 @@ for f in usr/share/luci/menu.d/luci-app-cowplay.json usr/share/rpcd/acl.d/luci-a
 done
 [ -x "$root/usr/libexec/rpcd/cowplay" ]
 chroot "$root" /bin/sh -c '/usr/libexec/rpcd/cowplay list | jsonfilter -e "@.status" >/dev/null'
+chroot "$root" /bin/sh -c '/usr/libexec/rpcd/cowplay list | jsonfilter -e "@.update_check.channel" | grep -q "^$"'
 chroot "$root" /bin/sh -c '/usr/libexec/rpcd/cowplay list | jsonfilter -e "@.tesla_status" -e "@.tesla_climate_command" >/dev/null'
 # post-install ran uci-defaults once and dropped LuCI caches; it did not enable or start anything.
 grep -q "option port '18443'" "$root/etc/config/cowplay"

@@ -49,8 +49,10 @@ transaction status and journal before recovery. Systemd running status does not 
 Bluetooth, Wi-Fi, CarPlay media, audio or browser compatibility; these need device tests.
 
 First-use access code: a new default /var/lib/cowplay directory is initialized by
-this installer. On first opening CowPlay, choose and confirm a six-digit code.
-Every new browser must verify that receiver code; QR links do not bypass access.
+this installer. On first opening CowPlay, choose and confirm a six-digit code,
+or explicitly choose no access code. With a code enabled, every new browser must
+verify it. Without one, devices that can reach the page can enter directly.
+QR links only open the page. The receiver preserves the chosen access mode.
 For an explicitly new custom state directory, run `sudo cowplay init-access DIR`
 once before starting. It refuses an existing access-token file. Do not use it to
 repair missing/corrupt access state: preserve and inspect that state instead.

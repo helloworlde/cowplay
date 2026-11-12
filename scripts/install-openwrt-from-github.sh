@@ -2,9 +2,11 @@
 # Run locally as administrator on the F50, after checking this script's SHA-256.
 set -eu
 umask 077
-version=${1:?Usage: install-openwrt-from-github.sh VERSION PUBLIC_KEY_SHA256}
+version=${1:?Usage: install-openwrt-from-github.sh VERSION PUBLIC_KEY_SHA256 [stable|dev]}
 fingerprint=${2:?Public release key SHA256 required}
-[ "$#" -eq 2 ] || exit 1
+channel=${3:-stable}
+[ "$#" -ge 2 ] && [ "$#" -le 3 ] || exit 1
+case "$channel" in stable|dev) ;; *) echo 'Invalid release channel' >&2; exit 1;; esac
 printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]{0,8})(\.(0|[1-9][0-9]{0,8})){2}(-r(0|[1-9][0-9]{0,8}))?$' || { echo 'Invalid version' >&2; exit 1; }
 printf '%s\n' "$fingerprint" | grep -Eq '^[0-9a-f]{64}$' || { echo 'Invalid public-key fingerprint' >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] && [ -f /etc/openwrt_release ] && [ "$(cat /etc/apk/arch)" = aarch64_generic ] || { echo 'Requires an OpenWrt aarch64_generic administrator session' >&2; exit 1; }
@@ -29,7 +31,7 @@ hash=$(awk '
 chmod 700 "$work/cowplay-updater-aarch64"
 updater=$work/cowplay-updater-aarch64
 "$updater" update-bootstrap
-result=$(printf '{"tag":"%s"}' "$tag" | "$updater" update check)
+result=$(printf '{"tag":"%s","channel":"%s"}' "$tag" "$channel" | "$updater" update check)
 job=$(printf '%s' "$result" | jsonfilter -e '@.id')
 [ -n "$job" ] || { echo "$result" >&2; exit 1; }
 applied=no

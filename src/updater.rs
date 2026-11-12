@@ -22,7 +22,15 @@ use tokio::io::AsyncReadExt;
 type Result<T> = std::result::Result<T, String>;
 const MAX_PACKAGE: u64 = 128 * 1024 * 1024;
 const MAX_JSON: usize = 1024 * 1024;
+const MAX_RELEASE_LIST: usize = 8 * 1024 * 1024;
 const NAMES: [&str; 2] = ["cowplay", "luci-app-cowplay"];
+#[derive(Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Channel {
+    #[default]
+    Stable,
+    Dev,
+}
 #[derive(Clone)]
 struct Paths {
     root: PathBuf,
@@ -79,6 +87,8 @@ struct Job {
     created: u64,
     queued: u64,
     source: Source,
+    #[serde(default)]
+    channel: Channel,
     tag: String,
     manifest: Option<Manifest>,
     installed: BTreeMap<String, String>,
@@ -223,7 +233,7 @@ fn source(p: &Paths) -> Result<Source> {
 }
 fn public(j: &Job) -> Value {
     json!({"id":j.id,"phase":j.phase,"message":j.message,"created":j.created,"repository":j.source.repository,
-        "tag":j.tag,"version":j.manifest.as_ref().map(|m| &m.version),"arch":j.manifest.as_ref().map(|m| &m.arch),
+        "channel":j.channel,"tag":j.tag,"version":j.manifest.as_ref().map(|m| &m.version),"arch":j.manifest.as_ref().map(|m| &m.arch),
         "installed":j.installed,"backup":j.backup,"service_was_running":j.was_running,
         "packages":j.manifest.as_ref().map(|m| &m.packages),"recovery_required":j.applying && j.phase!="complete"})
 }
@@ -351,14 +361,8 @@ fn validate(
     for v in &m.upgrade_from {
         version(v)?;
     }
-    // One explicitly reviewed transition from the pre-release numbering scheme.
-    // A partial/mixed install or any other downgrade still needs manual review.
-    let first_release_migration = matches!(m.version.as_str(), "0.0.1-r0" | "0.0.2-r0")
-        && m.upgrade_from.iter().any(|v| v == "0.3.14-r34")
-        && current.len() == NAMES.len()
-        && NAMES.iter().all(|name| current.get(*name).is_some_and(|v| v == "0.3.14-r34"));
     for old in current.values() {
-        if version(old)? > target && !first_release_migration {
+        if version(old)? > target {
             return Err("拒绝降级；请单独审查旧程序与状态兼容性".into());
         }
         if old != &m.version && !m.upgrade_from.contains(old) {
@@ -501,31 +505,52 @@ async fn verify_manifest(p: &Paths, dir: &Path) -> Result<Manifest> {
     serde_json::from_slice(&read(&dir.join("cowplay-release.json"), MAX_JSON)?)
         .map_err(|_| "发布清单 JSON 格式无效".into())
 }
+fn select_release<'a>(info: &'a Value, tag: &str, channel: Channel) -> Result<&'a Value> {
+    let matches = |release: &&Value| {
+        release["draft"] == false && release["prerelease"] == (channel == Channel::Dev)
+    };
+    if tag.is_empty() && channel == Channel::Dev {
+        return info.as_array().ok_or("GitHub 返回的不是版本列表")?
+            .iter().filter(matches)
+            .filter_map(|release| tag_version(release["tag_name"].as_str()?).ok().map(|version| (version, release)))
+            .max_by_key(|(version, _)| *version).map(|(_, release)| release)
+            .ok_or_else(|| "暂无可用开发版，请检查预发布版本列表".into());
+    }
+    if !matches(&info) {
+        return Err("版本不属于所选渠道，或仍是草稿；正式版与开发版不能混用".into());
+    }
+    let actual = info["tag_name"].as_str().ok_or("GitHub 发布缺少标签")?;
+    tag_version(actual)?;
+    if !tag.is_empty() && actual != tag {
+        return Err("GitHub 返回的标签与所选版本不符".into());
+    }
+    Ok(info)
+}
 async fn check(p: &Paths, j: &mut Job) -> Result<()> {
     let (arch, release) = platform(p)?;
     j.installed = installed(p).await?;
     let dir = p.job(&j.id)?;
     let http = client().await?;
-    let endpoint = if j.tag.is_empty() {
-        "latest".to_owned()
+    let endpoint = if !j.tag.is_empty() {
+        format!("releases/tags/{}", j.tag)
+    } else if j.channel == Channel::Dev {
+        "releases?per_page=100".to_owned()
     } else {
-        format!("tags/{}", j.tag)
+        "releases/latest".to_owned()
     };
     download(
         &http,
         &format!(
-            "https://api.github.com/repos/{}/releases/{endpoint}",
+            "https://api.github.com/repos/{}/{endpoint}",
             j.source.repository
         ),
         &dir.join("github.json"),
-        MAX_JSON as u64,
+        if j.tag.is_empty() && j.channel == Channel::Dev { MAX_RELEASE_LIST } else { MAX_JSON } as u64,
     )
     .await?;
-    let release_info: Value = serde_json::from_slice(&read(&dir.join("github.json"), MAX_JSON)?)
+    let release_info: Value = serde_json::from_slice(&read(&dir.join("github.json"), MAX_RELEASE_LIST)?)
         .map_err(|_| "GitHub 返回的数据不是发布信息")?;
-    if release_info["draft"] != false || release_info["prerelease"] != false {
-        return Err("此更新通道只接受已公开的稳定版".into());
-    }
+    let release_info = select_release(&release_info, &j.tag, j.channel)?;
     let tag = release_info["tag_name"]
         .as_str()
         .ok_or("GitHub 发布缺少标签")?;
@@ -689,6 +714,11 @@ async fn install(p: &Paths, j: &mut Job) -> Result<()> {
             + 16 * 1024 * 1024,
     )?;
     let http = client().await?;
+    download(&http, &format!("https://api.github.com/repos/{}/releases/tags/{}", j.source.repository, j.tag),
+        &dir.join("github-install.json"), MAX_JSON as u64).await?;
+    let release_info: Value = serde_json::from_slice(&read(&dir.join("github-install.json"), MAX_JSON)?)
+        .map_err(|_| "GitHub 返回的数据不是发布信息")?;
+    select_release(&release_info, &j.tag, j.channel)?;
     for pkg in &m.packages {
         download(
             &http,
@@ -1147,6 +1177,8 @@ async fn cli_at(p: &Paths, action: &str, input: &Value) -> Result<Value> {
     let mut j = match action {
         "check" => {
             let s = source(p)?;
+            let channel = input.get("channel").map(|value| serde_json::from_value(value.clone()))
+                .transpose().map_err(|_| "更新渠道必须为 stable 或 dev")?.unwrap_or_default();
             let tag = input["tag"].as_str().unwrap_or("");
             if !tag.is_empty() {
                 tag_version(tag)?;
@@ -1164,6 +1196,7 @@ async fn cli_at(p: &Paths, action: &str, input: &Value) -> Result<Value> {
                 created: now(),
                 queued: now(),
                 source: s,
+                channel,
                 tag: tag.into(),
                 manifest: None,
                 installed: BTreeMap::new(),
@@ -1291,6 +1324,7 @@ mod tests {
             source: Source {
                 repository: "example/cowplay".into(),
             },
+            channel: Channel::Stable,
             tag: "v0.3.15".into(),
             manifest: Some(manifest()),
             installed: NAMES
@@ -1439,29 +1473,12 @@ esac
         fs::read_to_string(p.at("events")).unwrap_or_default()
     }
     #[test]
-    fn first_release_migrates_only_complete_r34_and_uses_canonical_tags() {
+    fn release_tags_are_canonical() {
         assert_eq!(release_tag("0.0.1-r0"), "v0.0.1");
         assert_eq!(release_tag("0.0.1-r1"), "v0.0.1-r1");
         assert_eq!(tag_version("v0.0.1").unwrap(), [0, 0, 1, 0]);
         assert!(tag_version("v0.0.1-r0").is_err());
         assert!(tag_version("v0.0.1/evil").is_err());
-        let mut m = manifest(); m.version = "0.0.1-r0".into(); m.tag = "v0.0.1".into();
-        m.upgrade_from = vec!["0.3.14-r34".into()];
-        for pkg in &mut m.packages { pkg.file = format!("{}-{}-{}.apk", pkg.name, m.version, pkg.arch); }
-        let source = job().source;
-        let pair = |v: &str| NAMES.iter().map(|n| (n.to_string(), v.to_owned())).collect::<BTreeMap<_,_>>();
-        let valid = |m: &Manifest, current: &BTreeMap<String, String>| validate(m, &source, &m.tag, "aarch64_generic", "25.12.6", current);
-        assert!(valid(&m, &pair("0.3.14-r34")).is_ok());
-        assert!(valid(&m, &pair("0.0.1-r0")).is_ok());
-        for old in ["0.3.14-r33", "0.3.14-r35", "0.0.2-r0"] { assert!(valid(&m, &pair(old)).is_err()); }
-        let mut mixed = pair("0.3.14-r34"); mixed.insert("luci-app-cowplay".into(), "0.0.1-r0".into());
-        assert!(valid(&m, &mixed).is_err()); mixed.remove("luci-app-cowplay"); assert!(valid(&m, &mixed).is_err());
-        m.version="0.0.2-r0".into();m.tag="v0.0.2".into();m.upgrade_from.push("0.0.1-r0".into());
-        for pkg in &mut m.packages {pkg.file=format!("{}-{}-{}.apk",pkg.name,m.version,pkg.arch);}
-        assert!(valid(&m,&pair("0.3.14-r34")).is_ok());assert!(valid(&m,&pair("0.0.1-r0")).is_ok());
-        assert!(valid(&m,&pair("0.0.3-r0")).is_err());
-        assert!(valid(&m,&pair("0.3.14-r33")).is_err());
-        m.upgrade_from.clear(); assert!(valid(&m, &pair("0.3.14-r34")).is_err());
     }
     #[test]
     fn lock_release_does_not_wait_for_inherited_descriptors() {
@@ -1542,6 +1559,32 @@ esac
             };
             assert!(valid(&bad, &j.installed).is_err());
         }
+    }
+    #[test]
+    fn development_and_stable_releases_never_cross_channels() {
+        let stable = json!({"tag_name":"v0.0.2","draft":false,"prerelease":false});
+        let dev = json!({"tag_name":"v0.0.3","draft":false,"prerelease":true});
+        assert!(select_release(&stable, "", Channel::Stable).is_ok());
+        assert!(select_release(&stable, "v0.0.2", Channel::Stable).is_ok());
+        assert!(select_release(&dev, "v0.0.3", Channel::Stable).is_err());
+        assert!(select_release(&stable, "v0.0.2", Channel::Dev).is_err());
+        assert!(select_release(&dev, "v0.0.3", Channel::Dev).is_ok());
+        assert!(select_release(&dev, "v0.0.4", Channel::Dev).is_err());
+        for invalid in [json!({"tag_name":"v0.0.3","draft":true,"prerelease":true}),
+            json!({"tag_name":"v0.0.3","draft":false}),
+            json!({"tag_name":"v0.0.3","draft":false,"prerelease":"true"})] {
+            assert!(select_release(&invalid, "v0.0.3", Channel::Dev).is_err());
+        }
+        let list = json!([stable, dev,
+            {"tag_name":"v0.0.10","draft":false,"prerelease":true},
+            {"tag_name":"v9.0.0","draft":true,"prerelease":true},
+            {"tag_name":"dev","draft":false,"prerelease":true}]);
+        assert_eq!(select_release(&list, "", Channel::Dev).unwrap()["tag_name"], "v0.0.10");
+        assert!(select_release(&json!([]), "", Channel::Dev).is_err());
+        assert!(serde_json::from_value::<Channel>(json!("unknown")).is_err());
+        let mut legacy = serde_json::to_value(job()).unwrap();
+        legacy.as_object_mut().unwrap().remove("channel");
+        assert!(serde_json::from_value::<Job>(legacy).unwrap().channel == Channel::Stable);
     }
     #[test]
     fn github_redirect_allowlist_and_path_input() {

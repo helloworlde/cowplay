@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Actual signed downloads and updater in an isolated ARM64 OpenWrt root.
 
-Requires a prepared r34 root, proc mounted inside that root, and signed assets.
+Requires a fresh disposable OpenWrt root, proc mounted inside it, and signed assets.
 All network traffic terminates at a synthetic local HTTPS GitHub server.
 """
 import hashlib
@@ -22,13 +22,13 @@ root, assets = (Path(p).resolve() for p in sys.argv[1:3])
 project = Path(__file__).resolve().parent.parent
 assert root != Path('/') and (root / 'etc/openwrt_release').is_file()
 manifest = json.loads((assets / 'cowplay-release.json').read_text())
-assert manifest['version'] == '0.0.1-r0'
+version = manifest['version']
 tag = manifest['tag']
 fingerprint = hashlib.sha256((assets / 'release-key.pem').read_bytes()).hexdigest()
 spec = importlib.util.spec_from_file_location('release', project/'scripts/prepare-github-release.py')
 release = importlib.util.module_from_spec(spec); spec.loader.exec_module(release)
 script_hash = hashlib.sha256((assets/'install-openwrt-from-github.sh').read_bytes()).hexdigest()
-command = release.bootstrap_command('helloworlde/cowplay', tag, manifest['version'], script_hash, fingerprint)
+command = release.bootstrap_command('helloworlde/cowplay', tag, manifest['version'], script_hash, fingerprint, 'dev')
 calls = []
 environment = {k:v for k,v in os.environ.items() if 'proxy' not in k.lower()}
 def chroot(*args, check=True, **kwargs):
@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-tls-') as directory:
         def do_GET(self):
             calls.append(self.path)
             if self.path in [f'/repos/helloworlde/cowplay/releases/tags/{tag}','/repos/helloworlde/cowplay/releases/latest']:
-                data=json.dumps(dict(draft=False,prerelease=False,tag_name=tag,assets=[dict(name=n,state='uploaded',browser_download_url=f'https://github.com/helloworlde/cowplay/releases/download/{tag}/{n}') for n in ['cowplay-release.json','cowplay-release.sig']])).encode()
+                data=json.dumps(dict(draft=False,prerelease=True,tag_name=tag,assets=[dict(name=n,state='uploaded',browser_download_url=f'https://github.com/helloworlde/cowplay/releases/download/{tag}/{n}') for n in ['cowplay-release.json','cowplay-release.sig']])).encode()
             elif self.path.startswith(f'/helloworlde/cowplay/releases/download/{tag}/'):
                 file=assets/self.path.rsplit('/',1)[-1]
                 if not file.is_file():self.send_error(404);return
@@ -66,12 +66,12 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-tls-') as directory:
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(tls/'cert',tls/'key');server.socket=context.wrap_socket(server.socket,server_side=True)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
-        result=chroot('/bin/sh','/tmp/install.sh','0.0.1','0'*64,check=False,timeout=30)
+        result=chroot('/bin/sh','/tmp/install.sh',version,'0'*64,'dev',check=False,timeout=30)
         assert result.returncode != 0 and not (root/'etc/cowplay/releases.json').exists(), 'bad key must not configure trust'
         signature=(assets/'SHA256SUMS.sig').read_bytes()
         try:
             (assets/'SHA256SUMS.sig').write_bytes(b'synthetic invalid signature')
-            result=chroot('/bin/sh','/tmp/install.sh','0.0.1',fingerprint,check=False,timeout=30)
+            result=chroot('/bin/sh','/tmp/install.sh',version,fingerprint,'dev',check=False,timeout=30)
             assert result.returncode != 0 and not (root/'etc/cowplay/releases.json').exists(), 'bad signature must not execute helper'
         finally:(assets/'SHA256SUMS.sig').write_bytes(signature)
         # Execute the exact release command that is pasted into LuCI. Its outer
@@ -98,10 +98,10 @@ with tempfile.TemporaryDirectory(prefix='bootstrap-tls-') as directory:
         assert before==state_hashes(), 'private state changed'
         assert Path(str(root)+status['backup']).is_file(), 'local backup missing'
         rows=json.loads(chroot('/usr/bin/apk','--no-network','query','--installed','--format','json','--fields','name,version','cowplay','luci-app-cowplay').stdout)
-        assert {p['version'] for p in rows}=={'0.0.1-r0'} and len(rows)==2
+        assert {p['version'] for p in rows}=={version} and len(rows)==2
         assert not any('restore' in p.name for p in (root/'etc/rc.d').glob('*cowplay*'))
         # The installed rpcd entry can recover update status without the bootstrap shell.
         reply=json.loads(chroot('/usr/libexec/rpcd/cowplay','call','update_status',input='{}').stdout)
         assert reply['phase']=='complete' and reply['locked'] is False
-        print(json.dumps(dict(result='SIGNED_BOOTSTRAP_R34_MIGRATION_DETACHED_WORKER_AND_LUCI_STATUS_PASSED',checks=['wrong fingerprint preserves trust','invalid signature never executes helper','HTTPS GitHub download with CA validation','real r34 double package migration','private state and backup retained','background command survives return','installed rpcd restores status'],requests=len(calls)),indent=2))
+        print(json.dumps(dict(result='SIGNED_BOOTSTRAP_FIRST_INSTALL_DETACHED_WORKER_AND_LUCI_STATUS_PASSED',checks=['wrong fingerprint preserves trust','invalid signature never executes helper','HTTPS GitHub download with CA validation','signed double package first installation','private state and backup retained','background command survives return','installed rpcd restores status'],requests=len(calls)),indent=2))
     finally:server.shutdown();server.server_close();thread.join()

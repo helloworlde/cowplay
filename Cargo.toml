@@ -7,7 +7,7 @@ edition = "2021"
 license = "GPL-3.0-only"
 [package]
 name = "cowplay"
-version = "0.0.2"
+version = "0.0.1"
 edition = "2024"
 license = "GPL-3.0-only"
 [features]

@@ -31,7 +31,7 @@ async function rpc(m){if(m.method==='list')return {jsonrpc:'2.0',id:m.id,result:
  if(object==='cowplay'){if(rpcErrors[method])return {jsonrpc:'2.0',id:m.id,result:[rpcErrors[method]]};if(emptyReplies[method])return {jsonrpc:'2.0',id:m.id,result:[0,{}]};if(failStatus&&method==='status')return {jsonrpc:'2.0',id:m.id,result:[0,{error:'合成服务已停止'}]};
  const s=await fetchApi('state'),context={session:s.session?.id??null,viewer:s.viewer?.id??null,phone:s.current_phone??null,epoch:0};
  if(method==='update_status')r={...updateState};
- if(method==='update_check'){updateState={...updateState,id:'synthetic-release-'+(++updateSequence),phase:'ready',version:'0.3.15-r0',arch:'aarch64_generic',tag:args.tag||'v0.3.15',message:'发布清单签名已验证；安装前仍须下载并验证两个 APK',locked:false};r={...updateState};}
+ if(method==='update_check'){updateState={...updateState,id:'synthetic-release-'+(++updateSequence),phase:'ready',version:'0.3.15-r0',arch:'aarch64_generic',tag:args.tag||'v0.3.15',channel:args.channel||'stable',message:'发布清单签名已验证；安装前仍须下载并验证两个 APK',locked:false};r={...updateState};}
  if(method==='update_apply'){if(args.id!==updateState.id)r={error:'任务已变化'};else{updateState={...updateState,phase:'installing',locked:true,message:'正在安装两个软件包；请勿断电或操作服务'};r={...updateState};}}
  if(method==='update_prepare'){updateState={...updateState,phase:'complete',locked:false,message:'已准备系统升级恢复缓存',system_upgrade:{prepared:true,blocked:false}};r={...updateState};}
  if(method==='update_acknowledge'){updateState={...updateState,phase:'acknowledged',locked:false,message:'已确认人工检查；备份和任务记录保留'};r={...updateState};}

@@ -42,14 +42,12 @@
 - `admin/management.rs`：可选的独立管理令牌鉴权，复用本机维护实现；令牌与普通投屏 cookie 分离，POST 要求同源。
 - `admin/http.rs`：管理层提供给车机/手机的 HTTP 路由、鉴权与响应。
 
-`src/console.rs` 继续提供车机/手机页面的状态、命令和偏好接口，`src/ctl.rs` 提供本机维护入口；LuCI 保留其登录和 ACL 边界。职责搬移本身未改前端源码、嵌入资源或路由；后续 r16 整合保留其现有行为。
+`src/console.rs` 提供车机/手机页面的状态、命令和偏好接口，`src/ctl.rs` 提供本机维护入口；LuCI 保留其登录和 ACL 边界。
 
 ## 持久日志
 
 `src/persistent_logs.rs` 负责持久存储挂载核验、日志文件安全打开与有界历史读取；`admin/preferences.rs` 调用其挂载核验，`admin.rs` 配置日志，`admin/diagnostics.rs` 与 `admin/http.rs` 提供状态、自检及经过鉴权的导出。`crates/server/src/diag.rs` 负责诊断记录、脱敏和持久写入队列，`log_store.rs` 负责文件写入、轮转、保留及同步。`src/service.rs` 在原有总退出期限内等待诊断写入排空。
 
-## 兼容与后续边界
+## 平台边界
 
-旧公开入口 `core::tesla::{Category, Reading, Telemetry, Update, Values}`、`server::ultra::feed`、`cowplay::{board, network, uci}` 和 Admin 的公开类型/函数通过重导出保留。职责拆分本身未改变配置、配对文件、JSON 字段、TLS、BUILD_ID、PROTOCOL 或 APK 版本；版本与兼容范围由发布清单声明。
-
-Linux 兼容增量提供 `bluetooth.kind=system` 和非 `hci0` 适配器，默认使用状态目录中的 JSON 策略。F50 旧配置仍使用厂商初始化、私有 BlueZ、hci0、UCI 与 LuCI。系统后端不请求全局 default agent；配对从 CowPlay 页面主动发起。Tesla 服务与可选带服务配置的授权命令使用对应总线／适配器。通用车辆模型、Ultra 默认声明和 F50/Tesla 优先适配行为保持不变。普通 Linux／树莓派实机完整链路仍待验收。
+Linux 兼容增量提供 `bluetooth.kind=system` 和非 `hci0` 适配器，默认使用状态目录中的 JSON 策略。F50 配置使用厂商初始化、私有 BlueZ、hci0、UCI 与 LuCI。系统后端不请求全局 default agent；配对从 CowPlay 页面主动发起。Tesla 服务与可选带服务配置的授权命令使用对应总线／适配器。通用车辆模型、Ultra 默认声明和 F50/Tesla 优先适配行为保持不变。普通 Linux／树莓派实机完整链路仍待验收。

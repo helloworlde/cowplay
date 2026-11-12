@@ -3,7 +3,7 @@
 'require ui';
 
 var schema = {
-    update_status: [], update_check: ['tag'], update_apply: ['id'], update_acknowledge: ['id'],
+    update_status: [], update_check: ['tag', 'channel'], update_apply: ['id'], update_acknowledge: ['id'],
     status: [], diag: [], phones: [], screens: [], logs: ['level', 'limit', 'module'], logs_export: [], timeline: ['scope'], proc: [],
     token: [], token_reset: [], token_set: ['token'], token_disable: [], cert: [], certificate_export: ['kind'], config_export: [], cmd: ['cmd', 'id'], client_remove: ['id'],
     reload: [], selftest: [], bundle: [], service_info: [], network_check: ['port'], network_prepare: ['port', 'fingerprint', 'management_scheme', 'management_port'], network_commit: ['id'], network_status: ['id'], network_confirm: ['id','management_scheme','management_port'], network_cancel: ['id'], network_recover: ['id'], ddns_sync: [], ddns_token: ['token'],

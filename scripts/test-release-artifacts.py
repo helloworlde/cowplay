@@ -49,7 +49,29 @@ with tempfile.TemporaryDirectory(prefix='release-artifacts-', dir=project / 'tar
                 member = tarfile.TarInfo(root_name + '/' + name); member.size = len(data); archive.addfile(member, io.BytesIO(data))
         linux.append(archive_path)
     output = tmp / 'assets'
-    run(['python3', project / 'scripts/prepare-github-release.py', '--repository', 'example/cowplay', '--core', inputs[0], '--luci', inputs[1], '--sign-key', key, '--upgrade-from', '0.3.14-r16', '--openwrt-release', '25.12.6', '--output', output, '--apk', args.apk, '--openssl', args.openssl, '--linux-x86_64', linux[0], '--linux-arm64', linux[1]])
+    notes = tmp / 'release-notes.md'
+    run(['python3', project / 'scripts/prepare-github-release.py', '--repository', 'example/cowplay', '--channel', 'dev', '--core', inputs[0], '--luci', inputs[1], '--sign-key', key, '--upgrade-from', '0.3.14-r16', '--openwrt-release', '25.12.6', '--output', output, '--notes', notes, '--apk', args.apk, '--openssl', args.openssl, '--linux-x86_64', linux[0], '--linux-arm64', linux[1]])
+    expected_assets = {
+        'cowplay-0.3.15-r0-aarch64_generic.apk', 'luci-app-cowplay-0.3.15-r0-noarch.apk',
+        *(p.name for p in linux), 'release-key.pem', 'cowplay-release.json', 'cowplay-release.sig',
+        'SHA256SUMS', 'SHA256SUMS.sig', 'install-linux-from-github.sh',
+        'install-openwrt-from-github.sh', 'cowplay-updater-aarch64',
+    }
+    assert {p.name for p in output.iterdir()} == expected_assets
+    body = notes.read_text()
+    assert '# CowPlay v0.3.15' in body and '仍需实机验收' in body and '开发预发布' in body
+    assert str(tmp) not in body and key.read_text() not in body
+    script_hash = hashlib.sha256((output / 'install-openwrt-from-github.sh').read_bytes()).hexdigest()
+    fingerprint = hashlib.sha256((output / 'release-key.pem').read_bytes()).hexdigest()
+    assert script_hash in body and fingerprint in body
+    core_only = tmp / 'core-assets'
+    core_notes = tmp / 'core-notes.md'
+    run(['python3', project / 'scripts/prepare-github-release.py', '--repository', 'example/cowplay', '--channel', 'stable', '--core', inputs[0], '--luci', inputs[1], '--sign-key', key, '--openwrt-release', '25.12.6', '--output', core_only, '--notes', core_notes, '--apk', args.apk, '--openssl', args.openssl])
+    assert 'tar.gz' not in core_notes.read_text() and 'LuCI 首次安装命令' not in core_notes.read_text()
+    assert '**正式版**' in core_notes.read_text() and '开发预发布' not in core_notes.read_text()
+    rejected_output = tmp / 'rejected-assets'
+    run(['python3', project / 'scripts/prepare-github-release.py', '--repository', 'example/cowplay', '--channel', 'dev', '--core', inputs[0], '--luci', inputs[1], '--sign-key', key, '--openwrt-release', '25.12.6', '--output', rejected_output, '--notes', rejected_output / 'notes.md', '--apk', args.apk, '--openssl', args.openssl], success=False)
+    assert not rejected_output.exists()
     assert key.read_bytes() not in b''.join(p.read_bytes() for p in output.iterdir())
     manifest = json.loads((output / 'cowplay-release.json').read_bytes())
     keys = tmp / 'keys'
@@ -65,6 +87,7 @@ with tempfile.TemporaryDirectory(prefix='release-artifacts-', dir=project / 'tar
         assert hashlib.sha256((output / name).read_bytes()).hexdigest() == digest
     assert all(path.name in covered for path in linux)
     assert 'install-linux-from-github.sh' in covered
+    assert covered == expected_assets - {'SHA256SUMS', 'SHA256SUMS.sig'}
     packages = []
     for pkg in manifest['packages']:
         file = output / pkg['file']

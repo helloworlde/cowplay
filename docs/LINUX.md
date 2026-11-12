@@ -2,6 +2,8 @@
 
 支持普通 Linux 两种架构的构建、签名、发布和安装升级。OpenWrt 使用原签名 APK 通道；Linux 通用包不装入 OpenWrt，不携带 F50 的私有 BlueZ 运行时，也不改变系统蓝牙、热点、驱动或固件。
 
+Linux 下载器使用明确指定的版本，不自动发现或切换渠道。在 Releases 中区分正式版与 Pre-release，再固定该标签下载和验签；开发包不能被当作正式版。LuCI 的渠道选择适用于 OpenWrt 安装包。
+
 ## 发布附件
 
 | 附件 | 用途 |
@@ -22,18 +24,18 @@
 
 先在主机官方包源安装 `curl`、OpenSSL、系统 CA 及安装所需标准工具。安装器使用 POSIX sh、coreutils（含 `timeout`、`mv -T`）、util-linux `flock`、tar；只有 systemd 模式使用 `systemctl`。不自动运行 apt/dnf 或修改系统蓝牙服务。
 
-以下以 r17 为例；仓库公开并发布正式签名 Release 后才有可下载附件。指纹由管理员从可信渠道核对，不能从同一未验证下载中自动接受新公钥。以下命令由管理员在目标主机上执行。
+以下以 `v0.0.1` 为版本格式示例；实际选择已发布且兼容的签名版本。指纹由管理员从可信渠道核对，不能从同一未验证下载中自动接受新公钥。以下命令由管理员在目标主机上执行。
 
 ```sh
 (
     set -eu
     umask 077
-    version=0.3.14-r17
+    version=0.0.1-r0
     expected_key_sha256='填写已核对的64位发布公钥SHA256指纹'
     printf '%s\n' "$expected_key_sha256" | grep -Eq '^[0-9a-f]{64}$'
     work=$(mktemp -d /tmp/cowplay-bootstrap.XXXXXX)
     trap 'rm -rf "$work"' EXIT HUP INT TERM
-    base="https://github.com/helloworlde/cowplay/releases/download/v$version"
+    base="https://github.com/helloworlde/cowplay/releases/download/v${version%-r0}"
     for file in release-key.pem SHA256SUMS SHA256SUMS.sig install-linux-from-github.sh; do
         curl --fail --location --proto '=https' --proto-redir '=https' \
             --connect-timeout 15 --max-time 180 --max-filesize 65536 \
@@ -100,7 +102,7 @@ cowplay ctl reload /var/lib/cowplay/control.sock
 cowplay tesla-pair /var/lib/cowplay/tesla-ble.json /etc/cowplay/config.json
 ```
 
-`packaging/cowplay.service` 是可选 systemd 模板，不自动安装或启用，不配置自动重启。它等待 network-online.target 并要求现有 bluetooth.service；主机的 wait-online／AP 配置必须覆盖所选接口与地址，不能把 network-online 本身当作热点已经就绪的证据。模板使用 `/usr/local/bin/cowplay` 与上述配置路径。F50 继续使用原 procd/APK 生命周期。
+`packaging/cowplay.service` 是包内的 systemd 模板，安装器按所选模式放置，不自动启用或启动，也不配置自动重启。它等待 network-online.target 并要求现有 bluetooth.service；主机的 wait-online／AP 配置必须覆盖所选接口与地址，不能把 network-online 本身当作热点已经就绪的证据。模板使用 `/usr/local/bin/cowplay` 与上述配置路径。F50 继续使用原 procd/APK 生命周期。
 
 ## 升级与失败恢复
 
@@ -131,4 +133,4 @@ python3 scripts/test-linux-download.py
 python3 scripts/test-release-artifacts.py
 ```
 
-下载测试只将 GitHub 域名在测试包装器中映射到本机 TLS 夹具，使用临时测试证书和真实 curl/OpenSSL。它证明校验及安装前拒绝路径，不证明尚未公开的真实 GitHub Release 下载或真实 Linux／树莓派硬件功能。
+下载测试只将 GitHub 域名在测试包装器中映射到本机 TLS 夹具，使用临时测试证书和真实 curl/OpenSSL。它证明校验及安装前拒绝路径，不证明真实 GitHub Release 下载或 Linux／树莓派完整无线 CarPlay 功能。

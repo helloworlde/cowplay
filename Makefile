@@ -16,7 +16,7 @@ CORE_APK := $(APK_DIR)/cowplay-$(VERSION).apk
 LUCI_APK := $(APK_DIR)/luci-app-cowplay-$(VERSION).apk
 DEVICE ?= root@192.0.2.1
 DEVICE_HTTP ?= http://192.0.2.1
-# Needed only by test-luci (official LuCI JS runtime; see docs/UI-2026-11-08.md).
+# Needed by LuCI browser tests; prepare with scripts/prepare-luci-test-runtime.py.
 LUCI_RUNTIME_DIR ?=
 
 CONTAINER := $(DOCKER) run --rm --platform linux/arm64 -v "$(CURDIR)":/src -w /src \
