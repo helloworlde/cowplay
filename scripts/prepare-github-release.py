@@ -38,12 +38,14 @@ def release_notes(manifest, fingerprint, command, channel='dev'):
         + ('- Linux：选择 x86_64 或 ARM64 tar.gz，验证后按包内 README 安装。\n' if command else '')
         + f"- [安装与恢复说明](https://github.com/{manifest['repository']}/blob/{manifest['tag']}/docs/RELEASES.md)。\n\n"
         f"OpenWrt 目标平台：{', '.join(manifest['openwrt_releases'])} / {manifest['arch']}。\n\n"
+        '首次安装：导入发布公钥后，使用标准 APK 软件源安装；已有安装请使用 LuCI 更新入口。\n\n```sh\n'
+        f"apk add --repository https://github.com/{manifest['repository']}/releases/download/{manifest['tag']}/packages.adb cowplay luci-app-cowplay\n```\n\n"
         + ('LuCI 首次安装命令（完整校验后才执行，需管理员授权）：\n\n```sh\n' + command + '\n```\n\n' if command else '')
         + '## 验证与边界\n\n'
         f'发布公钥 PEM 的 SHA-256：`{fingerprint}`。请通过独立可信渠道核对。\n\n'
         '核对公钥后，验证 `SHA256SUMS.sig` 和安装文件 SHA-256；双 APK 及升级清单另有签名。'
         '附件仅含安装与验证材料，许可证和归属随包提供。\n\n'
-        '需自行准备合法配件身份、可信 HTTPS 证书和热点。升级保留私有状态，失败保留备份；'
+        '需自行准备合法配件身份、可信 HTTPS 证书和热点。通过 LuCI 更新时保留私有状态，失败保留备份；'
         '不保证仅覆盖旧程序即可回退。真实音频、双手机切换、Ultra／车辆控制、'
         'Linux 完整无线链路及长期稳定性仍需实机验收。\n'
     )
@@ -142,6 +144,11 @@ def main():
             run([args.apk, '--allow-untrusted', 'adbsign', '--reset-signatures', '--sign-key', args.sign_key.resolve(), target.resolve()])
             run([args.apk, '--keys-dir', keys, '--no-network', 'verify', target.resolve()])
             packages.append(dict(name=info['name'], arch=info['arch'], file=name, size=target.stat().st_size, sha256=hashlib.file_digest(target.open('rb'), 'sha256').hexdigest()))
+        index = args.output / 'packages.adb'
+        run([args.apk, '--keys-dir', keys, 'mkndx', '--sign-key', args.sign_key.resolve(),
+             '--pkgname-spec', '${name}-${version}-${arch}.apk', '--output', index.resolve(),
+             *((args.output / package['file']).resolve() for package in packages)])
+        run([args.apk, '--keys-dir', keys, '--no-network', 'verify', index.resolve()])
         manifest = dict(schema=1, repository=args.repository, tag='v' + (version[:-3] if version.endswith('-r0') else version), version=version, platform='openwrt-apk', openwrt_releases=args.openwrt_release, arch='aarch64_generic', upgrade_from=args.upgrade_from, packages=packages)
         file = args.output / 'cowplay-release.json'
         file.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')

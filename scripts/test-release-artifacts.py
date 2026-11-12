@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import io
 import tarfile
+import zlib
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--apk', default='apk')
@@ -55,11 +56,12 @@ with tempfile.TemporaryDirectory(prefix='release-artifacts-', dir=project / 'tar
         'cowplay-0.3.15-r0-aarch64_generic.apk', 'luci-app-cowplay-0.3.15-r0-noarch.apk',
         *(p.name for p in linux), 'release-key.pem', 'cowplay-release.json', 'cowplay-release.sig',
         'SHA256SUMS', 'SHA256SUMS.sig', 'install-linux-from-github.sh',
-        'install-openwrt-from-github.sh', 'cowplay-updater-aarch64',
+        'install-openwrt-from-github.sh', 'cowplay-updater-aarch64', 'packages.adb',
     }
     assert {p.name for p in output.iterdir()} == expected_assets
     body = notes.read_text()
     assert '# CowPlay v0.3.15' in body and '仍需实机验收' in body and '开发预发布' in body
+    assert 'apk add --repository https://github.com/example/cowplay/releases/download/v0.3.15/packages.adb cowplay luci-app-cowplay' in body
     assert str(tmp) not in body and key.read_text() not in body
     script_hash = hashlib.sha256((output / 'install-openwrt-from-github.sh').read_bytes()).hexdigest()
     fingerprint = hashlib.sha256((output / 'release-key.pem').read_bytes()).hexdigest()
@@ -105,16 +107,27 @@ with tempfile.TemporaryDirectory(prefix='release-artifacts-', dir=project / 'tar
     system_keys.mkdir(parents=True, exist_ok=True)
     (system_keys / 'cowplay-release.pem').write_bytes((output / 'release-key.pem').read_bytes())
     run([args.apk, '--root', root, '--no-network', 'verify', *packages])
+    index = output / 'packages.adb'
+    run([args.apk, '--root', root, '--no-network', 'verify', index])
     run([args.apk, '--root', root, '--arch', 'aarch64_generic', '--no-network', '--no-cache', '--repositories-file', '/dev/null', '--no-scripts', 'add', '--initdb', '--simulate', *packages, 'cowplay=0.3.15-r0', 'luci-app-cowplay=0.3.15-r0'])
-    run([args.apk, '--root', root, '--arch', 'aarch64_generic', '--no-network', '--no-cache', '--repositories-file', '/dev/null', '--no-scripts', 'add', '--initdb', *packages, 'cowplay=0.3.15-r0', 'luci-app-cowplay=0.3.15-r0'])
+    run([args.apk, '--root', root, '--arch', 'aarch64_generic', '--no-network', '--no-cache', '--repositories-file', '/dev/null', '--repository', index, '--no-scripts', 'add', '--initdb', 'cowplay=0.3.15-r0', 'luci-app-cowplay=0.3.15-r0'])
     rows = json.loads(run([args.apk, '--root', root, '--no-network', 'query', '--installed', '--format', 'json', '--fields', 'name,version', 'cowplay', 'luci-app-cowplay']))
     assert sorted((p['name'], p['version']) for p in rows) == [('cowplay', '0.3.15-r0'), ('luci-app-cowplay', '0.3.15-r0')]
     other = tmp / 'other.key'
     run([args.openssl, 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048', '-out', other])
     (keys / 'release.pem').write_bytes(run([args.openssl, 'pkey', '-in', other, '-pubout']))
     run([args.apk, '--keys-dir', keys, '--no-network', 'verify', packages[0]], success=False)
+    run([args.apk, '--keys-dir', keys, '--no-network', 'verify', index], success=False)
     (keys / 'release.pem').write_bytes((output / 'release-key.pem').read_bytes())
     run([args.apk, '--keys-dir', keys, '--no-network', 'verify', inputs[0]], success=False)
+    compressed_index = index.read_bytes()
+    assert compressed_index[:4] == b'ADBd'
+    changed_index = bytearray(zlib.decompress(compressed_index[4:], wbits=-15))
+    index.write_bytes(changed_index)
+    run([args.apk, '--keys-dir', keys, '--no-network', 'verify', index])
+    changed_index[changed_index.index(b'cowplay') + 6] = ord('x')
+    index.write_bytes(changed_index)
+    run([args.apk, '--keys-dir', keys, '--no-network', 'verify', index], success=False)
     (output / 'cowplay-release.json').write_text('{}')
     run([args.openssl, 'dgst', '-sha256', '-verify', keys / 'release.pem', '-signature', output / 'cowplay-release.sig', output / 'cowplay-release.json'], success=False)
 print('SIGNED_APK_LINUX_RELEASE_CHECKSUMS_FIRST_INSTALL_AND_TAMPER_REJECTION_PASSED')

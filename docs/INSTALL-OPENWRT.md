@@ -4,9 +4,11 @@
 
 ## 命令行首次安装
 
-按 [README 的 OpenWrt 命令](../README.md#openwrt--f50) 下载并验证公钥、签名清单和双 APK，使用 `apk add` 安装。安装后执行 `cowplay update-bootstrap` 初始化更新信任；为全新状态目录执行一次 `cowplay init-access /etc/cowplay/state`，它拒绝覆盖已有访问状态。
+按 [README 的 OpenWrt 命令](../README.md#f50--mu300-openwrt) 导入发布公钥，通过签名 `packages.adb` 使用标准 `apk add --repository` 安装两包。该软件源须先公开发布；旧版附件尚无索引。此入口仅用于首次安装，后续使用 LuCI 更新流程检查兼容性并备份状态。安装后执行 `cowplay update-bootstrap` 初始化更新信任；为全新状态目录执行一次 `cowplay init-access /etc/cowplay/state`，它拒绝覆盖已有访问状态。
 
 配置示例安装在 `/usr/share/cowplay/config.example.json`。准备本地合法身份、热点与可信 HTTPS 文件，写入 `/etc/cowplay/state/config.json` 后再启动服务。配置和私钥权限为 `0600`，私有状态目录为 `0700`。
+
+MU300 OpenWrt 必须保留厂商 5.4 蓝牙驱动、`/opt/mu300/bin/mu300-bt-init` 和 `/lib/firmware/bt_configure_{pskey,rf}.ini`。CowPlay 启动时完成初始化并运行包内 `/usr/lib/cowplay/bluez`，无需另外安装 BlueZ 包；不替换系统驱动或安装官方 6.12 内核模块。若已有程序占用控制器，先确认并协调该程序，CowPlay 不会强行接管。
 
 ## 首次安装：只有 LuCI 软件包页时
 
