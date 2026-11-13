@@ -5,7 +5,7 @@ import {phoneModel, phoneWifi} from '../shared/api';
 import {BUILD_ID} from '../build';
 import {renderPictureSettings, type PictureActions} from './picture';
 import {app} from './app';
-import {browserName, even, renderManagementEntry, switchRow} from './ui';
+import {browserName, even, renderManagementEntry, svg, switchRow} from './ui';
 
 export interface SessionActions extends PictureActions {
   audioControls():HTMLElement;
@@ -158,7 +158,7 @@ export function renderSheet(a: SessionActions): void {
     phonesKey=nextPhonesKey;
   }
   if(!$('sheet-input').childElementCount){
-    for(const [action,title] of [['previous','上一首'],['play','播放 / 暂停'],['next','下一首'],['select','选择']])$('sheet-input').append(h('button',{type:'button','data-action':action,onclick:()=>a.control(action)},title));
+    for(const [action,title,name] of [['previous','上一首','上一首'],['play','播放/暂停','播放或暂停'],['next','下一首','下一首'],['select','确认','确认（相当于旋钮按下）']])$('sheet-input').append(h('button',{type:'button','data-action':action,'aria-label':name,onclick:()=>a.control(action)},svg(action,24),h('span',{},title)));
   }
   renderPictureSettings(a);
   const audioBox=$('sheet-audio');if(!audioBox.querySelector('button:active')&&!audioBox.contains(document.activeElement))audioBox.replaceChildren(a.audioControls());
@@ -167,7 +167,7 @@ export function renderSheet(a: SessionActions): void {
   clear($('sheet-toggles'),
     switchRow('trow', 'CarPlay 夜间外观', '深色地图与界面', p.night, () => a.setPrefs({night: !p.night})));
   clear($('sheet-call'),
-    switchRow('trow', '用这块屏幕的麦克风', '只控制屏幕采音，音乐播放独立；变更会重连', p.call === 'web', () => a.setPrefs({call: p.call === 'web' ? 'bt' : 'web'})));
+    switchRow('trow', '使用这块屏幕的麦克风', '通话与 Siri 用屏幕采音 · 需要 HTTPS', p.call === 'web', () => a.setPrefs({call: p.call === 'web' ? 'bt' : 'web'})));
   clear($('sheet-debug'),
     switchRow('trow', '调试信息', '右上角显示画面、车机、接收端、iPhone 数据', p.debug, () => a.setPrefs({debug: !p.debug})));
     for(const button of $('sheet').querySelectorAll<HTMLButtonElement>('[role=switch]'))button.disabled=app.prefsSaving;

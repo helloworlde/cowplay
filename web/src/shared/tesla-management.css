@@ -1,1 +1,18 @@
 .tesla-management{scroll-margin-top:20px}.tesla-management h3{font-size:17px;margin:24px 0 12px}.tesla-phase{font-size:17px;line-height:1.5;margin:0 0 12px}.tesla-saved{border-block:1px solid var(--sep);padding:8px 0}.tesla-row{display:flex;justify-content:space-between;gap:18px;padding:9px 0;font-size:14px;line-height:1.5}.tesla-row>:last-child{text-align:right;max-width:65%;overflow-wrap:anywhere}.tesla-row>code{font-size:12px}.tesla-actions{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}.tesla-actions .primary{font-size:15px;margin:4px 0}.tesla-readings{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0}.tesla-reading{padding:14px;border:1px solid var(--sep);border-radius:10px;min-width:0}.tesla-reading dt{font-size:13px;color:var(--sec)}.tesla-reading dd{margin:8px 0 0;font-size:17px;line-height:1.4;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#tesla-feedback:empty,#tesla-pairing-deadline:empty{display:none}#tesla-feedback{overflow-wrap:anywhere}#tesla-vin{text-transform:uppercase;letter-spacing:.04em}@media(max-width:420px){.tesla-row{gap:12px}.tesla-actions{gap:4px 8px}.tesla-reading{padding:10px}.tesla-reading dd{font-size:15px}}
+
+.tesla-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.tesla-head h2{margin:0}
+.tesla-step{border-top:1px solid var(--sep);padding-top:4px;margin-top:20px}
+.tesla-step h3{display:flex;align-items:center;gap:10px}
+.tesla-step-no{display:inline-flex;align-items:center;justify-content:center;line-height:1;width:24px;height:24px;border-radius:50%;background:var(--group2,#2C2C2E);font-size:13px;font-weight:700;flex-shrink:0}
+.tesla-step-title{flex:1;min-width:0}
+.tesla-chip{font-size:12px;font-weight:600;padding:3px 8px;border-radius:999px;background:rgba(10,132,255,.18);color:var(--blue-text,#409CFF);white-space:nowrap}
+.tesla-reading dd small{display:block;margin-top:2px;font-size:12px;color:var(--sec)}
+.tesla-freshness{font-size:13px;color:var(--sec);line-height:1.5;margin:8px 0 12px}
+.tesla-actions .action{margin:4px 0;font-size:15px}
+.tesla-details{margin-top:24px;border-top:1px solid var(--sep);padding-top:8px}
+.tesla-details>summary{list-style:none;display:flex;align-items:center;justify-content:space-between;min-height:44px;cursor:pointer;color:var(--sec);font-size:15px}
+.tesla-details>summary::-webkit-details-marker{display:none}
+.tesla-details>summary::after{content:'›';font-size:22px;transition:transform .15s}
+.tesla-details[open]>summary::after{transform:rotate(90deg)}
+#tesla-refresh{color:var(--blue-text,#409CFF);min-height:44px;padding:0 4px}
+.tesla-management .tesla-step{background:none;border-radius:0;padding:4px 0 0;margin:20px 0 0}

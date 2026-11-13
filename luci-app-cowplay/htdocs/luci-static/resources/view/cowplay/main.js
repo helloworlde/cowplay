@@ -13,7 +13,7 @@ var diagnosticTabs = [['checks', '实时数据'], ['info', '设备信息'], ['ti
 var tabs = [['overview', '概览'], ['devices', '设备与访问'], ['display', '投屏策略'], ['network', '网络与证书']].concat(diagnosticTabs, [['system', '系统']]);
 var subtitles = {
     overview: '连接状态、视频传输与会话记录。',
-    devices: '管理已保存的 iPhone、屏幕授权和访问令牌。',
+    devices: '管理已保存的 iPhone、屏幕授权和访问码。',
     display: '设置新屏幕默认值和画面请求上限。',
     network: '',
     diag: '查看实测数据、设备信息、事件与日志。',
@@ -21,6 +21,7 @@ var subtitles = {
 };
 function val(v, unit, digits) { return v == null || !Number.isFinite(+v) ? '—' : (+v).toFixed(digits || 0) + (unit || ''); }
 function card(children) { return E('div', {class: 'cw-card'}, children); }
+function receiverModel(d) { var p = (d.network || {}).platform; return p === 'f50' ? 'F50' : p === 'openwrt' ? 'OpenWrt 主机' : p === 'linux' ? 'Linux 主机' : '主机'; }
 function note(s) { return E('p', {class: 'cw-foot'}, s); }
 function section(t, body, aside) { return E('section', {class: 'cbi-section cw-section'}, [E('h3', {}, [t, aside ? E('small', {class: 'cw-aside'}, aside) : null].filter(Boolean)), E('div', {class: 'cbi-section-node'}, body)]); }
 function row(k, v) { return E('div', {class: 'cw-row'}, [E('span', {class: 'cw-key'}, k), typeof v === 'string' ? E('span', {class: 'cw-value'}, v) : v]); }
@@ -93,7 +94,7 @@ return view.extend({
     },
     action: function(label, method, args, dangerous, done, available, failed, settled) {
         var self = this, key = method + ':' + label + ':' + (typeof args === 'function' ? '' : JSON.stringify(args || []));
-        var b = E('button', {type: 'button', 'data-cw-action': key, class: 'btn cbi-button ' + (dangerous ? 'cbi-button-negative' : 'cbi-button-neutral') + ' cw-btn', click: async function() {
+        var b = E('button', {type: 'button', 'data-cw-action': key, class: 'btn cbi-button ' + (dangerous === 'action' ? 'cbi-button-action' : dangerous ? 'cbi-button-negative' : 'cbi-button-neutral') + ' cw-btn', click: async function() {
             if (self.updateBusy || self.pendingActions.has(key) || !L.hasViewPermission() || available && !available()) return;
             var token = {phase: 'confirm'}, source = self.actionUI(), context = self.actionContext(), result, started = false;
             var current = function() { return !self.updateBusy && !token.cancelled && self.pendingActions.get(key) === token && L.hasViewPermission() && context === self.actionContext(); };
@@ -122,13 +123,13 @@ return view.extend({
     },
     privateKeyDownload: function(kind, label) {
         var self = this;
-        return E('button',{type:'button',class:'btn cbi-button cbi-button-neutral',disabled:!L.hasViewPermission() || null,click:async function() {
+        return E('button',{type:'button',class:'btn cbi-button cbi-button-negative',disabled:!L.hasViewPermission() || null,click:async function() {
             var context = self.actionContext(), button = this;
             var current = function() { return L.hasViewPermission() && context === self.actionContext(); };
             if (button.disabled || !current()) return;
             button.disabled = true;
             try {
-                if (!await confirmation.ask({key:'private-key-'+kind,title:label+'？',description:'将下载当前使用的私钥，请妥善保存。',confirm:'下载私钥',current:current}) || !current()) return;
+                if (!await confirmation.ask({key:'private-key-'+kind,title:label+'？',description:'持有私钥即可冒充这台 CowPlay 的身份。仅在迁移或备份时下载，保存在安全位置，不要分享、上传或放入诊断材料。',confirm:'下载私钥',current:current}) || !current()) return;
                 // LuCI's HttpOnly cookie is scoped to /cgi-bin/luci, not this sibling CGI.
                 var form = E('form',{method:'post',action:'/cgi-bin/cowplay-key-download',target:'_blank',rel:'noopener'},[
                     E('input',{type:'hidden',name:'kind',value:kind}), E('input',{type:'hidden',name:'sessionid',value:L.env.sessionid})]);
@@ -160,7 +161,7 @@ return view.extend({
     displayForm: function() {
         var m = this.map(), d = this.formSection(m, 'screen', 'defaults', '新屏幕默认值'), s, caps=(this.data.display_limits||{}).receiver;
         this.option(d, 'list', 'quality', '画质', [['auto', '自动'], ['smooth', '流畅 · 30 帧'], ['sharp', '清晰']]);
-        this.option(d, 'list', 'call', '通话与 Siri', [['bt', '不使用屏幕麦克风'], ['web', '屏幕麦克风']]);
+        this.option(d, 'list', 'call', '通话麦克风', [['bt', '不使用屏幕麦克风'], ['web', '屏幕麦克风']]);
         this.option(d, 'list', 'rail_side', '控制栏位置', [['left', '左侧'], ['right', '右侧']]);
         s = this.formSection(m, 'main', 'cowplay', '向 iPhone 请求的参数');
         var aliases = caps && caps.resolution_aliases || {}, choices = ['720p', '1080p', '1440p', '2160p'].filter(function(k) { return aliases[k]; }).map(function(k) { return [k, (k === '2160p' ? '4K' : k) + ' · ' + aliases[k].replace('x', '×')]; });
@@ -186,9 +187,10 @@ return view.extend({
         preferred.rmempty = true;
         (this.phones.phones || []).forEach(function(p) { preferred.value(p.id, p.name); });
         this.option(s, 'flag', 'ask_when_multi', '多台在线时在车机上询问');
-        s = this.formSection(m, 'main', 'cowplay', '访问令牌');
-        this.content(s, '_token', '当前令牌', this.tokenDisplay);
-        this.content(s, '_token_actions', '令牌操作', this.tokenActions);
+        this.unavailable(s, '_auto_note', '生效方式', '此处修改需点页面底部“保存并应用”；上方列表中的切换、忘记、添加会立即执行。');
+        s = this.formSection(m, 'main', 'cowplay', '访问码');
+        this.content(s, '_token', '当前访问码', this.tokenDisplay);
+        this.content(s, '_token_actions', '访问码操作', this.tokenActions);
         this.unavailable(s, '_token_note', '说明', '重置不自动撤销已授权设备；移除屏幕后立即停止其画面与触控。');
         return m.render();
     },
@@ -221,7 +223,7 @@ return view.extend({
             note('修改 Wi-Fi 会中断连接，之后需重启 CowPlay。'),
             E('details', {'data-network-help': ''}, [E('summary', {}, '车机网络说明'),
                 note('中国大陆 Model 3 / Y 手册列出 5 GHz 149–165；165 需核对带宽。以本车手册为准。'),
-                note('域名须解析到 F50 可达地址；注意与蜂窝 WAN、VPN 网段冲突。车机访问限制以实车为准。'),
+                note('域名须解析到 CowPlay 主机可达的地址；注意与蜂窝 WAN、VPN 网段冲突。车机访问限制以实车为准。'),
                 E('div', {class: 'cw-actions'}, [E('a', {href: 'https://www.tesla.cn/ownersmanual/model3/zh_cn/GUID-1FE9620C-3D7F-4FD3-BBD9-28DD342AC150.html', target: '_blank', rel: 'noopener'}, 'Tesla Wi-Fi 手册 ↗'), E('a', {href: 'https://www.iana.org/assignments/iana-ipv4-special-registry/', target: '_blank', rel: 'noopener'}, '网段说明 ↗')])])
         ].filter(Boolean)));
     },
@@ -288,18 +290,22 @@ return view.extend({
                     row('画面上报', displayNames[hub.display] || hub.display || '未知'),
                     row('解码尺寸', car.width && car.height ? car.width + '×' + car.height : '—'),
                     row('解码器', car.decoder || '—')]),
-                panel('F50 接收端', 'CowPlay ' + (d.version || '—'), status(d.error ? '服务状态未知' : '服务接口可用', d.error ? 'idle' : 'ok'), [
+                panel('CowPlay 接收端', receiverModel(d) + ' · ' + (d.version || '—'), status(d.error ? '服务状态未知' : '服务接口可用', d.error ? 'idle' : 'ok'), [
                     row('CPU', val(f.cpu, '%')), row('温度', val(f.temp, ' °C')),
                     row('可用内存', val(f.mem_free_mb, ' MB') + ' / ' + val(f.mem_total_mb, ' MB'))]),
                 panel('iPhone', d.phone ? d.phone.name : d.error ? '未知' : '尚未连接', status(observed(hub.phone, '会话已建立', '会话未建立'), hub.phone ? 'ok' : 'idle'), [
                     row('蓝牙 / iAP2', linkState(link, 'bluetooth')), row('Wi-Fi', linkState(link, 'wifi')),
                     row('CarPlay', linkState(link, 'carplay')), row('媒体输入', observed(hub.video, '已收到视频', '未收到视频'))])
             ]), '每 2 秒刷新'),
+            // Return paths to the projection surfaces; LuCI otherwise has no way back to them.
+            net.origin ? section('快捷入口', E('div', {class: 'cw-actions'}, [
+                E('a', {class: 'btn cbi-button cbi-button-neutral', href: net.origin + '/phone', target: '_blank', rel: 'noopener'}, '打开手机控制台 ↗'),
+                E('a', {class: 'btn cbi-button cbi-button-neutral', href: net.origin + '/car', target: '_blank', rel: 'noopener'}, '打开车机页面 ↗')])) : '',
             section('视频与传输', card([E('div', {class: 'cw-kpis'}, [
-                ['输入帧率', val(server.fps_in, ' fps', 1), 'iPhone → F50'],
+                ['输入帧率', val(server.fps_in, ' fps', 1), 'iPhone → 接收端'],
                 ['绘制帧率', val(car.fps, ' fps', 1), reportAge(st)],
-                ['往返时间 RTT', val(screenRtt(st), ' ms'), '车机 ↔ F50 · ' + rttSource(st)],
-                ['视频码率', val(server.bitrate_bps == null ? null : server.bitrate_bps / 1e6, ' Mbps', 1), 'F50 接收统计']
+                ['往返时间 RTT', val(screenRtt(st), ' ms'), '车机 ↔ 接收端 · ' + rttSource(st)],
+                ['视频码率', val(server.bitrate_bps == null ? null : server.bitrate_bps / 1e6, ' Mbps', 1), '接收端统计']
             ].map(function(x) { return E('div', {class: 'cw-kpi'}, [E('span', {}, x[0]), E('strong', {class: 'cw-reading'}, x[1]), E('small', {}, x[2])]); })),
                 note('向 iPhone 请求：' + (d.spec ? d.spec.width + '×' + d.spec.height + ' · 最高 ' + d.spec.fps + ' fps · ' + (d.spec.hevc ? 'H.265' : 'H.264') : '—') + (d.automatic_fps_limit === 30 ? ' · 自动降帧已生效' : ''))])),
             section('会话记录', card(table(['iPhone', '开始', '持续时间', '首帧', '结果'], (d.sessions || []).filter(function(s) { return !s.ended_ms || s.phone || s.model || s.peer || s.first_frame_ms || s.end_reason || s.warnings || (s.events || []).some(function(e) { return e.kind === 'error' || e.kind === 'warn'; }); }).map(function(s) {
@@ -309,7 +315,7 @@ return view.extend({
         );
         this.phoneTable.replaceChildren(card([table(['名称', '状态', '蓝牙地址', '最近使用', '自动连接', '操作'], (this.phones.phones || []).map(function(p) {
             return [p.name, p.current ? status('当前 iPhone', 'ok') : p.online ? '蓝牙已连接' : '未连接', p.bt || '—', p.last_ms ? new Date(p.last_ms).toLocaleString() : '—', p.preferred ? '首选' : '按最近使用', E('div', {class: 'cw-actions'}, [p.current ? E('span', {}, '当前 iPhone') : !p.current ? self.action(p.online ? '切换' : '连接', 'cmd', [p.online ? 'switchPhone' : 'connect', p.id]) : null, !p.current ? self.action('忘记', 'cmd', ['forgetPhone', p.id], true) : null].filter(Boolean))];
-        })), E('div', {class: 'cw-actions cw-end'}, [this.action('＋ 添加 iPhone', 'cmd', ['openPairWindow'], !!d.phone)])]), this.phones.pairing && this.phones.pairing.remaining_s != null ? note('配对窗口：' + this.phones.pairing.remaining_s + ' 秒；请在新 iPhone 上打开 设置 › 蓝牙 并选择“' + (this.phones.pairing.adapter_name || 'cowplay') + '”。') : note('添加新 iPhone 将结束当前 CarPlay，已有配对会保留。'));
+        })), E('div', {class: 'cw-actions cw-end'}, [this.action('＋ 添加 iPhone', 'cmd', ['openPairWindow'], 'action')])]), this.phones.pairing && this.phones.pairing.remaining_s != null ? note('配对窗口：' + this.phones.pairing.remaining_s + ' 秒；请在新 iPhone 上打开 设置 › 蓝牙 并选择“' + (this.phones.pairing.adapter_name || 'cowplay') + '”。') : note('添加新 iPhone 将结束当前 CarPlay，已有配对会保留。'));
         var pairing = this.phones.pairing;
         if (pairing && pairing.request != null && /^\d{6}$/.test(pairing.passkey || '')) this.phoneTable.append(section('蓝牙配对确认', card([row('配对码', E('code', {}, pairing.passkey.slice(0, 3) + ' ' + pairing.passkey.slice(3))), note('需要在 CowPlay 和 iPhone 两端确认。请打开配对页核对数字，再确认或拒绝；首次打开需输入上方的访问令牌。'), net.origin ? E('a', {href: net.origin.replace(/\/$/, '') + '/pair', target: '_blank', rel: 'noopener', class: 'btn cbi-button cbi-button-positive'}, '打开配对页确认或拒绝') : note('访问地址暂不可用，请在车机或手机配对页完成核码。')])));
         this.screenTable.replaceChildren(card(table(['屏幕', '浏览器 / 地址', '画面区', '最近使用', '操作'], (this.screens.screens || []).map(function(s) {
@@ -319,7 +325,7 @@ return view.extend({
         if (this.ddnsPanel) this.ddnsPanel.replaceChildren(this.ddnsInfo());
         this.runAddress.replaceChildren(net.origin ? E('a', {href: net.origin, target: '_blank', rel: 'noopener'}, net.origin) : E('span', {}, '未知；服务恢复后刷新'));
         var enabled = this.serviceData && this.serviceData.enabled;
-        this.runtime.replaceChildren(card([row('状态', d.error ? '状态未知' : '运行中 · PID ' + d.pid + ' · ' + Math.floor((d.uptime_s || 0) / 60) + ' 分钟'), row('开机自动启动', typeof enabled === 'boolean' ? E('div', {class: 'cw-actions'}, [status(enabled ? '已开启' : '已关闭', enabled ? 'ok' : 'idle'), this.action(enabled ? '关闭开机自启' : '开启开机自启', 'service', [enabled ? 'disable' : 'enable'])]) : E('a', {href: L.url('admin/system/startup')}, '状态未知；打开系统 › 启动项 ↗')), row('进程守护', (this.procData.process || {}).launcher || '未测得'), row('操作', E('div', {class: 'cw-actions'}, [this.action('启动服务', 'service', ['start']), this.action('重启服务', 'service', ['restart'], true), this.action('停止服务', 'service', ['stop'], true)]))]));
+        this.runtime.replaceChildren(card([row('状态', d.error ? '状态未知' : '运行中 · PID ' + d.pid + ' · ' + Math.floor((d.uptime_s || 0) / 60) + ' 分钟'), row('开机自动启动', typeof enabled === 'boolean' ? E('div', {class: 'cw-actions'}, [status(enabled ? '已开启' : '已关闭', enabled ? 'ok' : 'idle'), this.action(enabled ? '关闭开机自启' : '开启开机自启', 'service', [enabled ? 'disable' : 'enable'])]) : E('a', {href: L.url('admin/system/startup')}, '状态未知；打开系统 › 启动项 ↗')), row('进程守护', (this.procData.process || {}).launcher || '未测得'), row('操作', E('div', {class: 'cw-actions'}, [this.action('启动服务', 'service', ['start'], false, null, function() { return !!d.error; }), this.action('重启服务', 'service', ['restart'], true), this.action('停止服务', 'service', ['stop'], true)]))]));
         var sys = this.procData.system || {};
         this.about.replaceChildren(card([row('当前版本', d.version || '—'), row('构建', d.build || '—'), row('架构', sys.arch || '—'), row('系统', [sys.openwrt, sys.kernel].filter(Boolean).join(' · ') || '—'), row('蓝牙运行时', sys.bluez || '—'), row('许可证', 'GPL-3.0-only')]));
         if (this.lastSample && JSON.stringify(this.lastSample.context) !== JSON.stringify(d.context)) this.lastSample = null;
@@ -377,7 +383,7 @@ return view.extend({
                 self.procData = r;
                 var sys = r.system || {};
                 var wifi = f.wifi || {};
-                content = [section('车机屏幕', card([row('浏览器', viewer.ua || '尚未连接'), row('窗口 · 画面区', win.w ? win.w + '×' + win.h + ' · ' + win.rw + '×' + win.rh : '—'), row('解码', car.decoder || '—'), row('到 F50 往返时间', val(screenRtt(st),' ms') + ' · ' + rttSource(st))])),
+                content = [section('车机屏幕', card([row('浏览器', viewer.ua || '尚未连接'), row('窗口 · 画面区', win.w ? win.w + '×' + win.h + ' · ' + win.rw + '×' + win.rh : '—'), row('解码', car.decoder || '—'), row('到接收端往返时间', val(screenRtt(st),' ms') + ' · ' + rttSource(st))])),
                     section('F50', card([row('系统', [sys.openwrt, sys.kernel].filter(Boolean).join(' · ') || '—'), row('上行', f.uplink || '—'), row('蓝牙', sys.bluez || '—')])),
                     section('CarPlay Wi-Fi 热点', card([row('实测接口', wifi.iface || '未找到匹配热点的接口'), row('实测 SSID', wifi.ssid || '未取得'), row('配置 SSID', wifi.configured_ssid || (self.data.network || {}).ssid || '未配置'), row('实测信道 / 频宽', val(wifi.channel, '') + ' / ' + val(wifi.width_mhz, ' MHz')), row('配置交接信道', val(wifi.configured_channel == null ? (self.data.network || {}).channel : wifi.configured_channel, '')), row('客户端数', val(wifi.clients, ' 台')), row('采样年龄', val(wifi.sample_age_ms, ' ms')), row('来源', wifi.source || 'iw 接口与客户端列表；不是配置值推测')])),
                     section('iPhone', card([row('名称', (self.data.phone || {}).name || '未连接'), row('型号 · 系统', [phone.model, phone.ios ? 'iOS ' + phone.ios : null].filter(Boolean).join(' · ') || '—'), row('热点关联', phone.associated === true ? '已在目标热点客户端列表中识别' : phone.wifi_status === 'disconnected' ? '当前没有已连接手机' : '未知，未识别到当前手机的关联记录'),  row('请求画面', spec ? spec.width + '×' + spec.height + ' · ' + spec.fps + ' fps' : '—')]))];
@@ -480,24 +486,29 @@ return view.extend({
             note('导入你从第三方合法取得的配件证书及匹配私钥。项目不提供此资料；与下方浏览器 HTTPS 证书分别配置。'),
             this.mfiInfo,
             this.action('下载当前 CarPlay 公共证书', 'certificate_export', ['carplay'], false, function(r) { cp.download(r.name,r.pem); }, function() { return !!(self.certData || {}).carplay && !(self.certData || {}).carplay.error; }),
-            this.privateKeyDownload('carplay','下载当前 CarPlay 私钥'),
+            row('私钥（敏感）', E('div',{class:'cw-actions'},[this.privateKeyDownload('carplay','下载当前 CarPlay 私钥')])),
             row('证书 P7B / X.509 DER', mfiInputs[0]), row('P-256 私钥 PKCS8 DER', mfiInputs[1]),
             E('div', {class: 'cw-actions'}, mfiButton), mfiNotice, this.mfiStatus,
             note('验证通过后成对保存，原文件保留。手动重启 CowPlay 后生效，重启会中断当前投屏。')
         ]));
         var token = E('code', {}, '••••••'), tokenEpoch = 0, showEpoch = 0, resetEpoch = 0, tokenTimer;
-        var hideToken = function() { tokenEpoch++; clearTimeout(tokenTimer); token.textContent = '••••••'; };
-        var revealToken = function(result, epoch) { if (epoch !== tokenEpoch) return; token.textContent = result.mode === 'open' ? '未启用访问码' : result.token || '尚未选择，请首次打开 CowPlay 设置'; clearTimeout(tokenTimer); tokenTimer = setTimeout(hideToken, 30000); };
+        // One show/hide toggle; "hide" stays reachable while a read is pending so it can cancel the reveal.
+        var shown = false, revealing = false, showButton, hideButton;
+        var syncReveal = function() { var visible = shown || revealing; if (showButton) showButton.hidden = visible; if (hideButton) hideButton.hidden = !visible; };
+        var hideToken = function() { tokenEpoch++; clearTimeout(tokenTimer); token.textContent = '••••••'; shown = revealing = false; syncReveal(); };
+        var revealToken = function(result, epoch) { if (epoch !== tokenEpoch) return; token.textContent = result.mode === 'open' ? '未启用访问码' : result.token || '尚未选择，请首次打开 CowPlay 设置'; shown = true; revealing = false; syncReveal(); clearTimeout(tokenTimer); tokenTimer = setTimeout(hideToken, 30000); };
         this.hideManagementToken = hideToken;
         document.addEventListener('visibilitychange', function() { if (document.hidden) hideToken(); });
         this.tokenDisplay = token;
-        this.tokenActions = E('div', {class: 'cw-actions'}, [this.action('显示令牌', 'token', function() { hideToken(); showEpoch = tokenEpoch; return []; }, false, function(r) { revealToken(r, showEpoch); }), E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', click: hideToken}, '隐藏令牌'), this.action('重置令牌', 'token_reset', function() { hideToken(); resetEpoch = tokenEpoch; return []; }, true, function(r) { revealToken(r, resetEpoch); })]);
+        showButton = this.action('显示访问码', 'token', function() { hideToken(); showEpoch = tokenEpoch; revealing = true; syncReveal(); return []; }, false, function(r) { revealToken(r, showEpoch); }, null, function() { if (showEpoch === tokenEpoch) { revealing = false; syncReveal(); } });
+        hideButton = E('button', {type: 'button', class: 'btn cbi-button cbi-button-neutral', hidden: true, click: hideToken}, '隐藏访问码');
+        this.tokenActions = E('div', {class: 'cw-actions'}, [showButton, hideButton, this.action('重置访问码', 'token_reset', function() { hideToken(); resetEpoch = tokenEpoch; return []; }, true, function(r) { revealToken(r, resetEpoch); })]);
         var newAccessCode = E('input', {type:'password',inputmode:'numeric',maxlength:6,autocomplete:'new-password','aria-label':'新访问码',placeholder:'六位数字访问码',disabled:!L.hasViewPermission() || null}), accessCodeSnapshot = '';
         this.tokenActions.append(newAccessCode, this.action('修改访问码', 'token_set', function(){
             if(!/^\d{6}$/.test(newAccessCode.value))throw new Error('请输入六位数字访问码');
             accessCodeSnapshot = newAccessCode.value; newAccessCode.disabled = true; hideToken();
             return [accessCodeSnapshot];
-        },true,function(){if(newAccessCode.value === accessCodeSnapshot)newAccessCode.value='';hideToken();},null,null,function(){newAccessCode.disabled = !L.hasViewPermission();}));
+        },'action',function(){if(newAccessCode.value === accessCodeSnapshot)newAccessCode.value='';hideToken();},null,null,function(){newAccessCode.disabled = !L.hasViewPermission();}));
         this.tokenActions.append(this.action('不使用访问码', 'token_disable', [], true, function(){ hideToken(); token.textContent = '未启用访问码'; }));
         var tokenField = E('input', {type: 'password', autocomplete: 'new-password', placeholder: '只写入，不回显', 'aria-label': '证书 DNS API 令牌', disabled: !L.hasViewPermission() || null});
         this.dnsToken = tokenField;
@@ -551,7 +562,7 @@ return view.extend({
         this.rollbackButton = this.action('回滚到上一张证书', 'cert_rollback', [], true, null, function() { return !!self.certData.rollback && !(self.certData.task || {}).running; });
         this.renewButton = this.action('申请 / 续期', 'cert_renew', [], false, null, function() { return !(self.certData.task || {}).running; });
         this.certSettingsBody = E('div');
-        var certSection = section('HTTPS 证书', card([this.certInfo, E('div',{class:'cw-actions'},[this.action('下载当前 TLS 公共证书', 'certificate_export', ['tls'], false, function(r) { cp.download(r.name,r.pem); }, function() { return !!(self.certData || {}).details && !(self.certData || {}).details.error; }),this.privateKeyDownload('tls','下载当前 TLS 私钥')]), row('证书链 PEM', certEditor), row('私钥 PEM', keyEditor), fileNotice, row('操作', E('div', {class: 'cw-actions'}, [certBtn, this.rollbackButton])), E('details', {'data-cert-details': ''}, [E('summary', {}, '证书要求'), this.certExtraInfo,
+        var certSection = section('HTTPS 证书', card([this.certInfo, E('div',{class:'cw-actions'},[this.action('下载当前 TLS 公共证书', 'certificate_export', ['tls'], false, function(r) { cp.download(r.name,r.pem); }, function() { return !!(self.certData || {}).details && !(self.certData || {}).details.error; }),]), row('私钥（敏感）', E('div',{class:'cw-actions'},[this.privateKeyDownload('tls','下载当前 TLS 私钥')])), row('证书链 PEM', certEditor), row('私钥 PEM', keyEditor), fileNotice, row('操作', E('div', {class: 'cw-actions'}, [certBtn, this.rollbackButton])), E('details', {'data-cert-details': ''}, [E('summary', {}, '证书要求'), this.certExtraInfo,
             note('使用浏览器信任的完整证书链，域名和私钥须匹配。手动替换后停止自动续期。')])].filter(Boolean)));
         this.renewSection = section('证书申请与续期', E('details', {'data-certificate-renewal': ''}, [E('summary', {}, '自动申请 / 续期（可选）'), card([
             note('DNS-01 用于验证域名并签发证书，手动上传无需配置。'), this.renewInfo, this.certSettingsBody, this.renewButton,
@@ -588,7 +599,7 @@ return view.extend({
                 display: E('div', {}, [section('iPhone 能力与当前会话',self.displaySupport=E('div',{class:'cw-card'})),forms[1],note('接收端声明范围不是 iPhone 能力表；实际由手机决定是否接受。车机“控制”可边看边调，H.265 需显式选择且仍属实验。控制栏和网络属于本机设置。')]),
                 network: E('div', {}, [forms[2], self.mfiSection, self.wirelessPanel = E('div', {}, self.wirelessInfo()), self.ddnsPanel = E('div', {}, self.ddnsInfo())]),
                 diag: self.diagBody,
-                system: E('div', {}, [section('服务', self.runtime), forms[3], section('备份与恢复', card([row('CowPlay 配置（不含配件身份）', self.action('下载备份', 'config_export', [], false, function(r) { cp.download('cowplay.uci', r.text); })), row('导入配置', backupInput), importNotice, row('操作', E('div', {class: 'cw-actions'}, [restore])), note('恢复操作会替换 CowPlay 配置并刷新页面，未保存的编辑将丢弃；不修改配对和配件身份。')])), section('GitHub 安装与升级', updater.render(function() { return self.page === 'system'; }, function(busy) { self.updateBusy = busy; if (self.root) self.syncActions(); self.updateFooter(); }, function() { return !self.importRunning && !self.applyPending && ['dirty', 'saved', 'applying', 'reload_failed'].indexOf(self.editState) < 0; })), section('关于', self.about)])
+                system: E('div', {}, [section('服务', self.runtime), forms[3], section('备份与恢复', card([row('CowPlay 配置（不含配件身份）', self.action('下载备份', 'config_export', [], false, function(r) { cp.download('cowplay.uci', r.text); })), row('导入配置', backupInput), importNotice, row('操作', E('div', {class: 'cw-actions'}, [restore])), note('恢复操作会替换 CowPlay 配置并刷新页面，未保存的编辑将丢弃；不修改配对和配件身份。')])), section('GitHub 安装与升级', updater.render(function() { return self.page === 'system'; }, function(busy) { self.updateBusy = busy; if (self.root) self.syncActions(); self.updateFooter(); }, function() { return !self.importRunning && !self.applyPending && ['dirty', 'saved', 'applying', 'reload_failed'].indexOf(self.editState) < 0; }, function() { return self.data && self.data.version; })), section('关于', self.about)])
             };
             self.root.append(E('link', {rel: 'stylesheet', href: L.resource('cowplay/style.css')}), E('div', {class: 'cw-head'}, [E('div', {class: 'cw-grow'}, [E('h2', {}, 'CowPlay'), self.version]), self.pill]), E('ul', {class: 'cbi-tabmenu cw-tabs', role: 'tablist', 'aria-label': 'CowPlay 分组'}, tabs.map(function(t) { return E('li', {}, E('a', {href: '#' + t[0], role: 'tab', 'aria-label': t[1], 'data-target': t[0], 'data-diag': diagnosticTabs.some(function(d) { return d[0] === t[0]; }) ? t[0] : null, click: function(ev) { ev.preventDefault(); self.select(t[0]); }}, t[1])); }).concat([E('li', {}, E('a', {href: L.url('admin/services/cowplay/tesla'), 'aria-label': 'Tesla 车辆'}, 'Tesla 车辆'))])), self.intro, self.error);
             Object.keys(panes).forEach(function(page) { self.root.append(E('div', {'data-page': page, role: 'tabpanel'}, panes[page])); });

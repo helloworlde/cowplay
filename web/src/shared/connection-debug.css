@@ -7,3 +7,9 @@
 .connection-debug-note{margin:0;padding:0 16px 10px;color:var(--sec);overflow-wrap:anywhere}
 .connection-debug-log{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace;margin:0;padding:12px 16px;background:#0006;border-radius:0 0 14px 14px}
 #c-body>.connection-debug{width:min(760px,var(--content));margin-top:16px}
+
+.connection-debug summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.connection-debug summary::-webkit-details-marker{display:none}
+.connection-debug summary::after{content:'›';font-size:22px;font-weight:400;transition:transform .15s}
+.connection-debug[open]>summary::after{transform:rotate(90deg)}
+@media(prefers-reduced-motion:reduce){.connection-debug summary::after{transition:none}}

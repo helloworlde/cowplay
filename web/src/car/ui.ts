@@ -16,6 +16,18 @@ const ICON: Record<string, [string, number, string?]> = {
   reconnect: ['<path d="M20 12a8 8 0 1 1-2.34-5.66"></path><path d="M20 4v5h-5"></path>', 2.2],
   'chev-right': ['<polyline points="9 18 15 12 9 6"></polyline>', 2.2],
   'chev-left': ['<polyline points="15 18 9 12 15 6"></polyline>', 2.2],
+  picture: ['<rect x="3" y="5" width="18" height="14" rx="2.5"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="9.5" r="1.4"></circle>', 1.8],
+  speaker: ['<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"></path><path d="M15.5 9a4.2 4.2 0 0 1 0 6"></path><path d="M18 6.5a7.8 7.8 0 0 1 0 11"></path>', 1.8],
+  layout: ['<rect x="3" y="4" width="18" height="16" rx="2.5"></rect><path d="M8.5 4v16"></path>', 1.8],
+  vehicle: ['<path d="M4.5 14l1.4-4.3A2 2 0 0 1 7.8 8.3h8.4a2 2 0 0 1 1.9 1.4l1.4 4.3"></path><rect x="3" y="14" width="18" height="4.5" rx="1.6"></rect><path d="M6.5 18.5v1.5M17.5 18.5v1.5"></path>', 1.8],
+  info: ['<circle cx="12" cy="12" r="9"></circle><path d="M12 11v5.5"></path><path d="M12 7.6h.01"></path>', 2],
+  pulse: ['<path d="M3 12h4l2.5-6 5 12 2.5-6h4"></path>', 2],
+  more: ['<path d="M6 12h.01M12 12h.01M18 12h.01"></path>', 3],
+  close: ['<path d="M6 6l12 12M18 6L6 18"></path>', 2.2],
+  previous: ['<path d="M18 6v12l-9-6z" fill="currentColor"></path><path d="M6 6v12"></path>', 2],
+  play: ['<path d="M5 6v12l7.5-6z" fill="currentColor"></path><path d="M15.5 6.5v11M19.5 6.5v11"></path>', 2],
+  next: ['<path d="M6 6v12l9-6z" fill="currentColor"></path><path d="M18 6v12"></path>', 2],
+  select: ['<circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"></circle>', 1.8],
 };
 export function svg(name: string, size?: number): SVGSVGElement {
   const [markup, stroke, color] = ICON[name];
@@ -41,7 +53,7 @@ export function renderManagementEntry(el: HTMLElement, url: string | null, platf
   if (el.dataset.url === key) return;
   el.dataset.url = key;
   el.replaceChildren(url
-    ? h('a', {href: url, target: '_blank', rel: 'noopener noreferrer'}, '管理页 ↗', h('small', {}, platform === 'linux' ? '画面上限、证书与访问令牌' : 'Wi‑Fi、证书、DDNS、令牌与服务'))
+    ? h('a', {href: url, target: '_blank', rel: 'noopener noreferrer'}, '管理页 ↗', h('small', {}, platform === 'linux' ? '画面上限、证书与访问码' : 'Wi‑Fi、证书、DDNS、访问码与服务'))
     : h('span', {}, `管理页地址未知：${managementLocation(platform)}`));
 }
 

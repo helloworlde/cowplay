@@ -9,7 +9,7 @@ try {
  await service.fixture({networkPatch:{platform:'f50',luci:'https://receiver.example.test:9443/cgi-bin/luci/admin/services/cowplay'}});
  await b.viewport(1280,720);await b.goto(service.origin+'/car#settings/pic');
  await b.wait(()=>b.evaluate("!!document.querySelector('#settings-tesla')"),'Tesla settings link');
- assert.deepEqual(await b.evaluate("(()=>{const a=document.querySelector('#settings-tesla');return [a.href,a.target,a.textContent]})()"),['https://receiver.example.test:9443/cgi-bin/luci/admin/services/cowplay/tesla','_blank','TTesla 车辆配对与连接 ↗']);
+ assert.deepEqual(await b.evaluate("(()=>{const a=document.querySelector('#settings-tesla');return [a.href,a.target,a.textContent]})()"),['https://receiver.example.test:9443/cgi-bin/luci/admin/services/cowplay/tesla','_blank','Tesla 车辆配对与连接 ↗']);
  shots.push(await b.shot('tesla-settings-link-1280'));
  await b.viewport(800,480);assert.ok(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'));shots.push(await b.shot('tesla-settings-link-800'));
  checks.push('car settings links directly to Tesla management and preserves the advertised HTTPS port');

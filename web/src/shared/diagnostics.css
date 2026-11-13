@@ -1,7 +1,7 @@
-.diagnostic-measurements { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 12px; margin-bottom: 16px; }
+.diagnostic-measurements { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; margin-bottom: 16px; }
 .measurement-group { min-width: 0; margin: 0; }
 .measurement-group h2 { font-size: 1em; font-weight: 600; line-height: 1.4; margin: 0; padding: 16px 16px 0; }
-.measurement-source { color: var(--sec); font-size: 12px; line-height: 1.5; margin: 6px 16px 10px; }
+.measurement-source { color: var(--sec); font-size: 13px; line-height: 1.5; margin: 6px 16px 10px; }
 .measurement-values { margin: 0; padding: 0 16px 8px; }
 .measurement-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 10px 0; font-size: max(13px, .9em); line-height: 1.4; }
 .measurement-row + .measurement-row { border-top: 1px solid var(--sep); }

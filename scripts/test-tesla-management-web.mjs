@@ -8,7 +8,11 @@ import {start} from './lib/ui-browser.mjs';
 const root=path.resolve(import.meta.dirname,'..'),runtime=process.env.LUCI_RUNTIME_DIR;
 const skipped=runtime?[]:[{surface:'luci',reason:'LUCI_RUNTIME_DIR 未设置，跳过官方 LuCI DOM 验证；/manage 仍执行。'}];
 const resources=path.join(root,'luci-app-cowplay/htdocs/luci-static/resources');
-const calls=[],checks=[],shots=[];let stage='';let fail='',failMessage='合成请求失败',holdStatus=false,held=[],holdCommand=false,heldCommands=[],readonly=false;
+const calls=[],checks=[],shots=[];
+// The LuCI view and the shared web module each embed the phase wording; they must never drift apart.
+const phaseTable=file=>{const m=/phases(?::[^=]+)? = (\{[\s\S]*?\});/.exec(fs.readFileSync(file,'utf8'));assert.ok(m,'phase table in '+file);return Function('return '+m[1])();};
+assert.deepEqual(phaseTable(path.join(resources,'view/cowplay/tesla.js')),phaseTable(path.join(root,'web/src/shared/tesla-management.ts')),'LuCI and web Tesla phase wording are identical');
+checks.push('LuCI and web Tesla phase dictionaries are identical');let stage='';let fail='',failMessage='合成请求失败',holdStatus=false,held=[],holdCommand=false,heldCommands=[],readonly=false;
 const reading=value=>({value,received_ms:Date.now(),sample_received_ms:Date.now(),sampled_ms:Date.now(),sampled_time_trusted:true});
 const state={configured:true,enabled:true,connected:true,phase:'reading',pairing:'idle',pairing_deadline_ms:null,vin_masked:'SYNTH••••••••0001',key_ready:true,public_key_fingerprint:'SYNTHETIC-PUBLIC-FINGERPRINT',read_only:true,climate_authorized:false,vehicle:{enabled:true,connected:true,phase:'reading',values:{soc_pct:68,range_km:320,tires_kpa:[250,251,252,253]},telemetry:{soc_pct:reading(68),range_km:reading(320),tires_kpa:[250,251,252,253].map(reading)}},climate:{authorized:false,key_ready:true,public_key_fingerprint:'SYNTHETIC-DRIVER-PUBLIC-FINGERPRINT',phase:'idle',state:null,received_ms:null,fresh:false,last_command_status:'idle'}};
 state.ultra={enabled:true,channels:[true,false],session:7,climate_control:{context:3,available:false,allowed:false}};

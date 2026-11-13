@@ -18,7 +18,8 @@
 .picture-editor .picture-warning{font-size:14px;line-height:1.5;color:#ffd080}
 .picture-editor .picture-error{font-size:14px;line-height:1.5;color:#ffb0a8}.picture-editor .picture-error:empty,.picture-editor .picture-feedback:empty{display:none}
 .picture-apply-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-.picture-apply{min-height:46px;min-width:160px;border-radius:10px;background:#0a84ff;color:white;padding:10px 20px;font-weight:600}
+.picture-apply{min-height:46px;min-width:160px;border-radius:10px;background:var(--blue-fill,#0071E3);color:white;padding:10px 20px;font-weight:600}
+.picture-apply:disabled{background:var(--group2,#2C2C2E);color:var(--sec,#a2a2ad);opacity:1;cursor:default}
 .picture-text-button,.picture-editor .picture-reset{min-height:44px;background:transparent;color:#8bb9ff;border:0;padding:8px 0}
 .picture-editor .picture-reset{margin-left:auto;font-size:14px;text-align:right}
 .picture-advanced{border-top:1px solid #303034;margin-top:4px;padding-top:2px}

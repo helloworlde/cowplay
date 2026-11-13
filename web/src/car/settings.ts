@@ -5,7 +5,7 @@ import {qrSvg} from '../shared/qr';
 import {diagnosticMeasurements, diagnosticReadings} from '../shared/diagnostics';
 import {linkBusy, phoneModel, phoneWifi, type Phone, type Quality} from '../shared/api';
 import {app, type Tab} from './app';
-import {ago, browserName, minutes, renderManagementEntry, switchRow} from './ui';
+import {ago, browserName, minutes, renderManagementEntry, svg, switchRow} from './ui';
 import {openControls, pictureControls, type PictureActions} from './picture';
 
 export interface SettingsActions extends PictureActions {
@@ -17,14 +17,11 @@ export interface SettingsActions extends PictureActions {
   control(action:string):void;
   local(): {rw: number; rh: number; hardware: boolean; audio: {rate: number; channels: number} | null; wake: boolean};
 }
-const TITLES: Record<Tab, [string, string]> = {pic: ['画面', '清晰度与流畅度'], audio: ['通话与声音', '只影响这块屏幕'], display: ['显示', '只影响这块屏幕'], phones: ['iPhone', '所有屏幕共用'], devices: ['设备信息', '只读'], diag: ['诊断', '实时'], about: ['关于', '']};
+const TITLES: Record<Tab, [string, string]> = {pic: ['画面', '清晰度与流畅度'], audio: ['声音与通话', '只影响这块屏幕'], display: ['显示', '只影响这块屏幕'], phones: ['iPhone', '所有屏幕共用'], devices: ['设备信息', '只读'], diag: ['诊断', '实时数据'], about: ['关于', '']};
 const QN: Record<Quality, string> = {auto: '自动', smooth: '流畅', sharp: '清晰', custom:'自定义'};
 let shownTab: Tab | null = null, tabsHeight = 0;
 let tabsOwner = '', paneContext = '';
 
-function radio(title: string, sub: string, on: boolean, pick: () => void): HTMLElement {
-  return h('button', {type: 'button', class: 'row', role: 'radio', 'aria-checked': String(on), onclick: pick}, h('span', {class: 't'}, h('span', {}, title), h('small', {}, sub)), h('span', {class: 'check'}, '✓'));
-}
 const foot = (t: string) => h('p', {class: 'foot'}, t);
 const group = (...c: (HTMLElement | null)[]) => h('div', {class: 'group'}, ...c);
 
@@ -37,20 +34,25 @@ export function renderTabs(): void {
   tabsOwner = owner;
   const online = (s?.phones ?? []).filter(x => x.online).length;
   const defs: [Tab, string, string, string, string, string?][] = [
-    ['pic', '画面', '▣', '#0A84FF', p ? QN[p.quality] : ''],
-    ['audio', '通话与声音', '♪', '#30D158', p ? (p.call === 'bt' ? '不使用屏幕麦克风' : '屏幕麦克风') : ''],
-    ['display', '显示', 'Aa', '#5E5CE6', p ? (p.rail_side === 'left' ? '左侧' : '右侧') : ''],
-    ['phones', 'iPhone', '▯', '#0A84FF', s?.phones ? `${online} 台在线` : ''],
-    ['devices', '设备信息', 'i', '#8E8E93', ''],
-    ['diag', '诊断', '✚', '#FF9F0A', '实测数据'],
-    ['about', '关于', '…', '#8E8E93', s?.version ?? ''],
+    ['pic', '画面', 'picture', 'var(--blue)', p ? QN[p.quality] : ''],
+    ['audio', '声音与通话', 'speaker', 'var(--green)', p ? (p.call === 'bt' ? '不使用屏幕麦克风' : '屏幕麦克风') : ''],
+    ['display', '显示', 'layout', '#5E5CE6', p ? (p.rail_side === 'left' ? '左侧' : '右侧') : ''],
+    ['phones', 'iPhone', 'phone', 'var(--blue)', s?.phones ? `${online} 台在线` : ''],
+    ['devices', '设备信息', 'info', 'var(--idle)', ''],
+    ['diag', '诊断', 'pulse', 'var(--orange)', '实时数据'],
+    ['about', '关于', 'more', 'var(--idle)', s?.version ?? ''],
   ];
   clear(tabs, ...defs.map(([id, label, glyph, color, val, cls]) => h('button', {type: 'button', id: `settings-tab-${id}`, class: 's-tab', 'aria-current': app.tab === id ? 'page' : 'false', onclick: () => { location.hash = `settings/${id}`; }},
-    h('span', {class: 's-ico', style: `background:${color}`}, glyph), h('span', {class: 'lbl'}, label), h('span', {class: `val ${cls ?? ''}`}, val))));
+    h('span', {class: 's-ico', style: `background:${color}`}, svg(glyph, 18)), h('span', {class: 'lbl'}, label), h('span', {class: `val ${cls ?? ''}`}, val))));
   const tesla = teslaManagementUrl(s);
-  if (tesla) tabs.insertBefore(h('a', {id: 'settings-tesla', class: 's-tab', href: tesla, target: '_blank', rel: 'noopener noreferrer'},
-    h('span', {class: 's-ico', style: 'background:#E82127'}, 'T'), h('span', {class: 'lbl'}, 'Tesla 车辆'), h('span', {class: 'val'}, '配对与连接 ↗')), tabs.querySelector('#settings-tab-devices'));
+  const vehicle = s?.vehicle, vehicleText = vehicle ? (vehicle.connected ? '已连接' : vehicle.enabled ? '未连接' : '已停用') : '配对与连接';
+  if (tesla) tabs.insertBefore(h('a', {id: 'settings-tesla', class: 's-tab', href: tesla, target: '_blank', rel: 'noopener noreferrer', title: '在新标签页打开管理页'},
+    h('span', {class: 's-ico', style: 'background:var(--red)'}, svg('vehicle', 18)), h('span', {class: 'lbl'}, 'Tesla 车辆'), h('span', {class: 'val'}, `${vehicleText} ↗`)), tabs.querySelector('#settings-tab-devices'));
   tabs.scrollTop = scroll;
+  // Fade the bottom edge while more groups sit below the fold (compact car screens).
+  const more = () => { tabs.classList.toggle('more', tabs.scrollHeight - tabs.scrollTop - tabs.clientHeight > 4); };
+  if (!tabs.dataset.fade) { tabs.dataset.fade = '1'; tabs.addEventListener('scroll', more, {passive: true}); }
+  more();
   if (shownTab !== app.tab || tabsHeight !== tabs.clientHeight) {
     const current = tabs.querySelector<HTMLElement>('[aria-current=page]');
     if (current) {
@@ -82,10 +84,8 @@ export function renderPane(a: SettingsActions): void {
       body.push(pictureControls(a,'settings-picture'));
       break;
     case 'audio':
-      body.push(group(
-        radio('不使用屏幕麦克风', '音乐仍从屏幕播放；通话输入由 iPhone 选择', p.call === 'bt', () => a.setPrefs({call: 'bt'})),
-        radio('这块屏幕的麦克风', '需要 HTTPS · 切换后 iPhone 重新连接', p.call === 'web', () => a.setPrefs({call: 'web'}))));
-      body.push(foot('音乐从屏幕播放，与麦克风选择独立。通话和 Siri 的输入可在 iPhone 选择；系统是否允许分开路由以实际情况为准。更改会重连，配对保留。'));
+      body.push(group(switchRow('row', '使用这块屏幕的麦克风', '通话与 Siri 用屏幕采音 · 需要 HTTPS', p.call === 'web', () => a.setPrefs({call: p.call === 'web' ? 'bt' : 'web'}))));
+      body.push(foot('音乐始终从这块屏幕播放。关闭时由 iPhone 选择通话输入；切换后 iPhone 会重新连接，配对保留。'));
       body.push(a.audioControls());
       if (loc.audio) body.push(group(h('div', {class: 'row'}, h('span', {class: 't'}, '音乐与导航声音'), h('span', {class: 'val'}, `这块屏幕 · ${Math.round(loc.audio.rate / 1000)} kHz ${loc.audio.channels >= 2 ? '立体声' : '单声道'}`))));
       break;
@@ -102,6 +102,11 @@ export function renderPane(a: SettingsActions): void {
       const live = s.hub.phone || linkBusy(s);
       const add = h('button', {type: 'button', class: 'add-row', onclick: () => a.addPhone()}, '＋ 添加 iPhone');
       body.push(group(...list.map(x => phoneRow(x, a, live)), add));
+      if (list.length) {
+        const preferred = list.find(x => x.preferred)?.name;
+        const rule = s.policy.ask_when_multi ? `多台在线时在车机上询问${s.policy.ask_timeout ? `，${s.policy.ask_timeout} 秒后自动连接` : ''}` : '不询问，直接连接';
+        body.push(group(h('div', {class: 'row'}, h('span', {class: 't'}, h('span', {}, '自动连接'), h('small', {}, `${preferred ? `先连首选“${preferred}”` : '按最近使用顺序'} · ${rule}`)))));
+      }
       body.push(foot(s.phones_error ? `暂时读不到 iPhone 列表：${s.phones_error}` : live ? '可以直接切换到其他已保存的 iPhone，无需先断开；请保持目标手机蓝牙和 Wi-Fi 开启。正在使用的 iPhone 不能忘记。' : '上车先连“首选”，不在就按最近使用顺序试。点“连接”会呼叫那台 iPhone。'));
       break;
     }
@@ -118,7 +123,7 @@ export function renderPane(a: SettingsActions): void {
       body.push(h('div', {class: 'about-grid'},
         group(...rows.map(([k, v, mono]) => h('div', {class: 'row'}, h('span', {class: 't'}, k), h('span', {class: `val${mono ? ' mono' : ''}`, style: mono ? 'font-size:max(12px,calc(13px*var(--k)))' : ''}, v)))),
         h('div', {class: 'qr-col'},
-          qr(s.network.luci, s.network.platform === 'linux' ? 'CowPlay 管理' : '管理页（OpenWrt LuCI）', s.network.platform === 'linux' ? '画面上限、证书、访问令牌' : 'Wi‑Fi、证书、DDNS、令牌、系统', '管理页二维码'),
+          qr(s.network.luci, s.network.platform === 'linux' ? 'CowPlay 管理' : '管理页（OpenWrt LuCI）', s.network.platform === 'linux' ? '画面上限、证书、访问码' : 'Wi‑Fi、证书、DDNS、访问码', '管理页二维码'),
           qr(`${location.origin}/phone`, '手机控制台', '遥控、诊断、日志', '手机控制台二维码'))));
       body.push(h('details', {class: 'about-notices', open: noticesOpen},
         h('summary', {}, '开源许可'),

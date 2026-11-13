@@ -43,7 +43,7 @@
     <div id="climate-status" class="climate-status" role="status" hidden></div>
     <div class="video"><canvas id="freeze" aria-hidden="true" hidden></canvas><canvas id="screen" width="800" height="480" tabindex="0" aria-label="CarPlay 画面与触控区域"></canvas></div>
     <div id="cover" class="cover"><strong>CarPlay</strong><span id="cover-text"></span></div>
-    <section id="stats" class="stats" aria-label="调试信息" hidden><button type="button" id="stats-close" class="stats-close" aria-label="关闭调试信息">[X]</button><div id="stats-rows"></div></section>
+    <section id="stats" class="stats" aria-label="调试信息" hidden><button type="button" id="stats-close" class="stats-close" aria-label="关闭调试信息"><span data-svg="close"></span></button><div id="stats-rows"></div></section>
     <button type="button" id="handle" class="handle" aria-label="显示控制栏" hidden><span id="h-dot" class="sdot"></span><span id="h-chev" data-svg="chev-right"></span></button>
     <section id="stall" class="stall" role="status" hidden>
       <div class="stall-head"><i></i><span id="stall-title" class="stall-title">画面停住了，正在自动恢复</span></div>
@@ -55,7 +55,7 @@
       <div class="sheet-head"><b>控制</b><button type="button" id="sheet-done" class="sheet-close">完成</button></div>
       <div id="sheet-scroll" class="sheet-scroll">
         <details id="sheet-playback-group" class="control-group">
-          <summary><span>播放与操控<small>播放、切歌、选择</small></span></summary>
+          <summary><span>播放与操控<small>播放、切歌、确认</small></span></summary>
           <div class="control-group-body"><div id="sheet-input" class="input-actions" aria-label="CarPlay 控制"></div></div>
         </details>
         <details id="sheet-sound-group" class="control-group">

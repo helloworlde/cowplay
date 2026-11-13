@@ -34,10 +34,27 @@ const phases: Record<string, string> = {
 const field = (label: string, node: HTMLElement) => h('label', {class: 'manage-field'}, h('span', {}, label), node);
 const row = (label: string, node: HTMLElement) => h('div', {class: 'tesla-row'}, h('span', {}, label), node);
 const number = (value: number | null | undefined, unit: string, digits = 0) => value != null && Number.isFinite(value) ? `${value.toFixed(digits)} ${unit}` : '—';
-function metric(value: number | null | undefined, reading: Reading | null | undefined, unit: string, connected: boolean, ttl: number, digits = 0): string {
-  if (!connected) return '— · 车辆未连接';
-  if (value != null && Number.isFinite(value) && reading?.sampled_time_trusted && (reading.sampled_ms == null || reading.sampled_ms <= Date.now() + 5000) && Math.max(Date.now() - reading.received_ms, reading.sampled_ms == null ? 0 : Date.now() - reading.sampled_ms) <= ttl) return number(value, unit, digits);
-  return reading ? '— · 读数过期或采样时间未知' : '— · 尚无有效读数';
+/** A reading is shown only while fresh and trusted; otherwise "—" with a short reason (never a stale value). */
+function metric(value: number | null | undefined, reading: Reading | null | undefined, unit: string, connected: boolean, ttl: number, digits = 0): [string, string] {
+  if (!connected) return ['—', '车辆未连接'];
+  if (value != null && Number.isFinite(value) && reading?.sampled_time_trusted && (reading.sampled_ms == null || reading.sampled_ms <= Date.now() + 5000) && Math.max(Date.now() - reading.received_ms, reading.sampled_ms == null ? 0 : Date.now() - reading.sampled_ms) <= ttl) return [number(value, unit, digits), ''];
+  return reading ? ['—', '已过期'] : ['—', '暂无读数'];
+}
+type StepChip = '' | '下一步' | '进行中' | '已连接' | '已授权';
+/** Only claims what the status proves; finished steps stay unmarked rather than guessed. */
+export function teslaSteps(s: TeslaStatus): StepChip[] {
+  const needsPairing = ['not_authorized', 'authorization_failed', 'pairing_failed', 'pairing_timeout', 'pairing_cancelled'].includes(s.phase);
+  const setup: StepChip = !s.configured || !s.key_ready ? '下一步' : '';
+  const pair: StepChip = setup ? '' : s.pairing === 'pairing' ? '进行中' : needsPairing ? '下一步' : '';
+  const link: StepChip = setup || pair ? '' : s.vehicle?.connected && s.phase === 'reading' ? '已连接' : s.enabled ? '下一步' : '';
+  return [setup, pair, link, s.climate?.authorized ? '已授权' : '', s.ultra?.climate_control?.allowed ? '已授权' : ''];
+}
+export function freshnessSummary(connected: boolean, reasons: string[]): string {
+  if (!connected) return '车辆未连接，读数暂不可用。';
+  const stale = reasons.filter(r => r === '已过期').length, missing = reasons.filter(r => r === '暂无读数').length;
+  if (stale) return `${stale} 项读数已过期或采样时间不可信，已隐藏旧值，等待车辆新数据。`;
+  if (missing === reasons.length) return '已连接，尚未收到车辆读数。';
+  return '电量与续航为 30 秒内采样，胎压为 2 分钟内采样。';
 }
 
 export function teslaManagement(call: Call): {element: HTMLElement; start: () => void; dispose: () => void} {
@@ -93,7 +110,9 @@ export function teslaManagement(call: Call): {element: HTMLElement; start: () =>
     const vehicle = state.vehicle;
     const values = vehicle?.values, telemetry = vehicle?.telemetry;
     const texts = [metric(values?.soc_pct, telemetry?.soc_pct, '%', !!vehicle?.connected, 30000), metric(values?.range_km, telemetry?.range_km, 'km', !!vehicle?.connected, 30000), ...[0, 1, 2, 3].map(i => metric(values?.tires_kpa?.[i], telemetry?.tires_kpa?.[i], 'kPa', !!vehicle?.connected, 120000))];
-    readings.forEach((node, i) => { node.querySelector('dd')!.textContent = texts[i]; });
+    readings.forEach((node, i) => { const [value, reason] = texts[i]; node.querySelector('dd')!.replaceChildren(value, reason ? h('small', {}, reason) : ''); });
+    freshness.textContent = freshnessSummary(!!vehicle?.connected, texts.map(([, reason]) => reason));
+    teslaSteps(state).forEach((chip, i) => { chips[i].textContent = chip; chips[i].hidden = !chip; });
     const climate = state.climate, data = climate?.state;
     ultra.textContent = `启用状态：${typeof state.ultra?.enabled === 'boolean' ? state.ultra.enabled ? '已启用' : '已停用' : '未知'} · 车辆通道：${state.ultra?.channels?.map((open, i) => `${i === 0 ? '高优先级' : '标准'}${open ? '已建立' : '未建立'}`).join(' / ') ?? '未知'} · 原生空调：${state.ultra?.climate_control?.allowed ? '已允许本次 CarPlay 控制' : '未授予本次 CarPlay 控制权限'} · ${state.ultra?.climate_control?.available ? '车辆读数有效' : '请先读取车辆空调状态'}`;
     driverKey.textContent = climate?.key_ready ? climate.authorized ? '控制身份已通过车辆认证，空调权限以命令回执为准' : '本机 Driver 身份已就绪，车辆授权待验证' : '尚未准备独立 Driver 身份';
@@ -172,18 +191,24 @@ export function teslaManagement(call: Call): {element: HTMLElement; start: () =>
   const reload = h('button', {type: 'button', id: 'tesla-refresh', class: 'secondary', onclick: () => { void refresh(); }}, '刷新状态');
   const nativeGrant = action('tesla-ultra-allow', '允许本次 CarPlay 控制空调', 'tesla_ultra_control', {title: '允许当前 iPhone 控制车辆空调？', description: '允许当前已认证 CarPlay 会话发送空调开关和双区温度命令。不会申请新的车辆权限；换手机、重连、换车或停服后需重新允许，可随时撤销。', confirm: '允许本次会话'}, () => configured() && climateFresh() && !!state?.ultra?.climate_control?.available && state.ultra.channels.some(Boolean) && !state.ultra.climate_control.allowed, () => ({enabled: true, session: state!.ultra!.session, context: state!.ultra!.climate_control.context}));
   const nativeRevoke = action('tesla-ultra-revoke', '撤销本次 CarPlay 空调控制', 'tesla_ultra_control', null, () => !!state?.ultra?.climate_control?.allowed, () => ({enabled: false, session: state!.ultra!.session, context: state!.ultra!.climate_control.context}));
+  const climateOn = climatePower(true), climateOff = climatePower(false);
+  // One primary action per step; the rest are secondary or destructive.
+  for (const [button, role] of [[cancel, 'secondary'], [disconnect, 'destructive'], [climatePair, 'secondary'], [climateOn, 'secondary'], [climateOff, 'secondary'], [setTemperature, 'secondary'], [nativeRevoke, 'destructive']] as const) button.className = `action ${role}`;
+  const chips = [0, 1, 2, 3, 4].map(() => h('span', {class: 'tesla-chip', hidden: true}));
+  const step = (n: number, title: string, ...children: (Node | null)[]) => h('section', {class: 'tesla-step', 'aria-label': title},
+    h('h3', {}, h('span', {class: 'tesla-step-no', 'aria-hidden': 'true'}, String(n)), h('span', {class: 'tesla-step-title'}, title), chips[n - 1]), ...children);
   const element = h('section', {id: 'tesla-management', class: 'tesla-management', 'aria-labelledby': 'tesla-title'},
-    h('h2', {id: 'tesla-title'}, 'Tesla 车辆'), h('p', {class: 'lead'}, '配对、连接与真实车辆读数。此页离开后保留车辆连接。'), status, feedback,
-    h('div', {class: 'tesla-saved'}, row('已保存的车辆', savedVin), row('只读身份密钥', key), row('只读公钥指纹', fingerprint), row('只读车辆授权', permission)),
-    h('form', {id: 'tesla-config-form'}, field('车辆 VIN', vin), h('p', {class: 'lead'}, '已有 VIN 不会回填。首次或更换车辆时输入完整 VIN；留空会保留已保存车辆。'), field('启用 Tesla 连接', enabled), save),
-    h('p', {class: 'lead'}, '首次使用：保存 VIN 和本机密钥 → 开始车内配对 → 在车辆内确认公钥 → 连接并核对真实读数。配对失败不会清除已有授权。'), countdown,
-    h('div', {class: 'tesla-actions'}, pair, cancel, connect, disconnect), reload,
-    h('h3', {}, '实时车辆数据'), h('dl', {class: 'tesla-readings'}, ...readings),
-    h('p', {class: 'lead'}, '缺失、过期或采样时间未知的读数显示“—”。连接成功不等于已经收到车辆数据。'),
-    h('h3', {}, '空调控制'), row('独立控制身份', driverKey), row('控制公钥指纹', driverFingerprint), climateStatus, climateValues, climateAge, climatePair,
-    h('p', {class: 'lead'}, 'Driver 授权能力范围广于空调。命令只发一次，失败或未确认时保留上次读数。车辆温度范围未知时不能设置目标温度。'),
-    climateQuery, h('div', {class: 'tesla-actions'}, climatePower(true), climatePower(false)), climateRange, field('驾驶位目标温度（°C）', driver), field('副驾目标温度（°C）', passenger), setTemperature,
-    h('h3', {}, 'CarPlay Ultra'), ultra, h('div', {class: 'tesla-actions'}, nativeGrant, nativeRevoke), h('p', {class: 'lead'}, '先申请独立 Driver 授权并读取空调状态，再明确允许当前 CarPlay 会话。原生界面只提供空调开关和双区温度，命令回执与实际读数分开；真实 iPhone 和车辆效果仍需现场验收。'));
+    h('div', {class: 'tesla-head'}, h('h2', {id: 'tesla-title'}, 'Tesla 车辆'), reload), h('p', {class: 'lead'}, '按步骤完成配置、车内配对和连接。离开此页后车辆连接保留。'), status, feedback,
+    step(1, '车辆', row('已保存的车辆', savedVin),
+      h('form', {id: 'tesla-config-form'}, field('车辆 VIN', vin), h('p', {class: 'lead'}, '已有 VIN 不会回填。首次或更换车辆时输入完整 VIN；留空会保留已保存车辆。'), field('启用 Tesla 连接', enabled), save)),
+    step(2, '车内配对', h('p', {class: 'lead'}, '车辆停稳后开始，在车内屏幕确认本机公钥。只申请读取车辆数据的权限；失败不会清除已有授权。'), countdown, h('div', {class: 'tesla-actions'}, pair, cancel)),
+    step(3, '连接与读数', h('div', {class: 'tesla-actions'}, connect, disconnect), h('p', {id: 'tesla-freshness', class: 'tesla-freshness', role: 'status'}), h('dl', {class: 'tesla-readings'}, ...readings)),
+    step(4, '空调控制（可选）', climateStatus, climateValues, climateAge, h('div', {class: 'tesla-actions'}, climateQuery, climatePair),
+      h('p', {class: 'lead'}, '升级授权需在车内确认，车辆授予的权限范围大于空调；页面只发送空调开关与双区温度，每条命令只发一次。'),
+      h('div', {class: 'tesla-actions'}, climateOn, climateOff), climateRange, field('驾驶位目标温度（°C）', driver), field('副驾目标温度（°C）', passenger), setTemperature),
+    step(5, 'CarPlay 原生空调（实验）', ultra, h('div', {class: 'tesla-actions'}, nativeGrant, nativeRevoke), h('p', {class: 'lead'}, '需先完成第 4 步并读取空调状态，再允许当前 CarPlay 会话控制。换手机、重连或停服后需重新允许；真实车辆效果需现场验收。')),
+    h('details', {class: 'tesla-details'}, h('summary', {}, '技术详情'), row('只读身份密钥', key), row('只读公钥指纹', fingerprint), row('只读车辆授权', permission), row('独立控制身份', driverKey), row('控制公钥指纹', driverFingerprint)));
+  const freshness = element.querySelector<HTMLElement>('#tesla-freshness')!;
   element.querySelector('form')!.onsubmit = event => { event.preventDefault(); save.click(); };
   sync();
   const tick = async () => { await refresh(); if (!disposed) timer = window.setTimeout(tick, 2000); };

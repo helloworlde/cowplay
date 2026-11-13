@@ -41,28 +41,28 @@ async function scenario(name,run){
 }
 
 await scenario('token-navigation-and-new-request',async({value,frame,click,route,load,hold,held,release,tokenVisible})=>{
- await load('settings');await hold('/api/token');await click('显示令牌');await held('/api/token');
+ await load('settings');await hold('/api/token');await click('显示访问码');await held('/api/token');
  await route('status');await route('settings');await release('/api/token');await frame();
  assert.equal(await tokenVisible(),false,'a reply from the previous settings visit cannot reveal the token');
- await click('显示令牌');await held('/api/token');assert.equal(await value("[...document.querySelectorAll('button')].find(e=>e.textContent==='正在读取令牌…')?.disabled"),true);await release('/api/token');await frame();
- assert.equal(await tokenVisible(),true,'a fresh explicit request still works');await click('隐藏令牌');assert.equal(await tokenVisible(),false);
+ await click('显示访问码');await held('/api/token');assert.equal(await value("[...document.querySelectorAll('button')].find(e=>e.textContent==='正在读取访问码…')?.disabled"),true);await release('/api/token');await frame();
+ assert.equal(await tokenVisible(),true,'a fresh explicit request still works');await click('隐藏访问码');assert.equal(await tokenVisible(),false);
 });
 
 await scenario('token-hidden-page',async({value,frame,click,load,hold,held,release,tokenVisible})=>{
- await load('settings');await hold('/api/token');await click('显示令牌');await held('/api/token');
+ await load('settings');await hold('/api/token');await click('显示访问码');await held('/api/token');
  await value("window.qaVisible=false;document.dispatchEvent(new Event('visibilitychange'))");await release('/api/token');await frame();
  assert.equal(await tokenVisible(),false,'a hidden page cannot reveal a delayed token');
- await value("window.qaVisible=true;document.dispatchEvent(new Event('visibilitychange'))");await click('显示令牌');await held('/api/token');await release('/api/token');await frame();
+ await value("window.qaVisible=true;document.dispatchEvent(new Event('visibilitychange'))");await click('显示访问码');await held('/api/token');await release('/api/token');await frame();
  assert.equal(await tokenVisible(),true);
  await value("window.qaVisible=false;document.dispatchEvent(new Event('visibilitychange'))");
  assert.equal(await tokenVisible(),false,'backgrounding also clears an already rendered token immediately');
 });
 
 await scenario('token-revoked-and-readmitted',async({b,f,value,frame,click,load,hold,held,release,tokenVisible})=>{
- await load('settings');await hold('/api/token');await click('显示令牌');await held('/api/token');
+ await load('settings');await hold('/api/token');await click('显示访问码');await held('/api/token');
  await f.fixture({auth:false});await b.wait(()=>value("!!document.querySelector('.auth')"),'authorization revoked');
  await value("document.querySelector('.auth input').value='123456';document.querySelector('.auth').requestSubmit()");
- await b.wait(()=>value("!document.querySelector('.auth')&&!![...document.querySelectorAll('button')].find(e=>e.textContent==='显示令牌')"),'same client readmitted');
+ await b.wait(()=>value("!document.querySelector('.auth')&&!![...document.querySelectorAll('button')].find(e=>e.textContent==='显示访问码')"),'same client readmitted');
  await release('/api/token');await frame();assert.equal(await tokenVisible(),false,'old authorization cannot reveal a token after readmission');
 });
 

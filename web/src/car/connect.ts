@@ -110,7 +110,7 @@ function pipeFor(sc: Scene, name: string): HTMLElement[] {
       return [car('warn', '未显示'), link(rtt(), 'ok'), f50, link(fps ? `${Math.round(fps)} fps` : '投屏中', 'ok'), node('phone', name, 'CarPlay 已连接', 'ok')];
     }
     case 'notfound': return [car(), link(rtt(), 'ok'), f50, link('尚未连接', 'warn'), node('phone', name, '等待响应', 'idle')];
-    case 'token': return [car('warn', '需要令牌'), link('—', 'idle'), node('f50', 'CowPlay', receiverDevice(app.state), 'ok'), link('—', 'idle'), node('phone', 'iPhone', '', 'idle')];
+    case 'token': return [car('warn', '需要访问码'), link('—', 'idle'), node('f50', 'CowPlay', receiverDevice(app.state), 'ok'), link('—', 'idle'), node('phone', 'iPhone', '', 'idle')];
     case 'stopped': return [car(), link(rtt(), 'ok'), f50, link('已断开', 'idle'), node('phone', `${phonesOf(s).length} 台 iPhone`, '配对已保留', 'idle')];
     default: {
       const st = steps(), active = st.findIndex(x => x.st !== 'done');
@@ -235,14 +235,17 @@ export function renderConnect(a: ConnectActions): void {
       body.push(phoneList(phones, a, targetPhone(s)?.id ?? null, 0, true));
       break;
     case 'token':
-      t = ['正在连接', name, '保持 iPhone 的蓝牙和 Wi‑Fi 打开。', '令牌只保存在这台车机上'];
+      t = ['正在连接', name, '保持 iPhone 的蓝牙和 Wi‑Fi 打开。', '访问码只在这台车机上验证'];
       body.push(h('ol', {class: 'steps'}, ...STEP_NAMES.map(x => h('li', {}, h('span', {class: 'bar'}), h('span', {class: 'lbl'}, x)))));
       break;
     default: {
       const e = app.channelError ? {title: '这块屏幕暂时连不上 CowPlay', hint: app.channelError}
         : s?.phones_error ? {title: '暂时读不到已保存的 iPhone', hint: s.phones_error}
         : s ? recentLinkError(s) : null;
-      t = e ? ['连接未完成', name, `${e.title.replace(/[。.]$/, '')}。${e.hint}`, '连上后自动进入 CarPlay'] : ['正在连接', name, '保持 iPhone 的蓝牙和 Wi‑Fi 打开，通常 10 秒内出现画面。', '连上后自动进入 CarPlay'];
+      t = e ? ['连接未完成', name, `${e.title.replace(/[。.]$/, '')}。${e.hint}`, '连上后自动进入 CarPlay']
+        // The pipe already reports CarPlay as connected; the headline must agree while the first frame is pending.
+        : s?.hub.phone ? ['已连接', name, 'CarPlay 已建立，正在等待第一帧画面。', '画面出现后自动进入 CarPlay']
+        : ['正在连接', name, '保持 iPhone 的蓝牙和 Wi‑Fi 打开，通常 10 秒内出现画面。', '连上后自动进入 CarPlay'];
       if (e) eb.className = 'eyebrow orange';
       body.push(stepList());
       body.push(actions(e ? btn(app.buildMismatch ? '刷新页面' : '重新连接', 'blue', () => a.retry()) : null, btn('换一台 iPhone', '', () => a.openChoose())));

@@ -248,7 +248,7 @@ function renderOverlay(): void {
       modal('画质',[pictureEditor.view({owner:target.id,prefs:p,window:target.window,spec:s.spec,limits:s.display_limits,maxRes:s.policy.max_res,maxFps:s.policy.max_fps,busy:app.prefsBusy,error:app.error,hevc:'remote',save:patch=>actions.prefs(patch,target.id),render},'phone-picture')]);
     }else{
     const opts: [string, string, string][] = app.pref === 'call' ? [['bt', '不使用屏幕麦克风', '音乐仍从屏幕播放；通话输入由 iPhone 选择'], ['web', '这块屏幕的麦克风', '需要 HTTPS · 切换后 iPhone 重新连接']] : [['left', '左侧', '控制栏靠左'], ['right', '右侧', '控制栏靠右']];
-    modal({quality: '画质', call: '通话与 Siri', rail_side: '控制栏位置'}[app.pref], [group(...opts.map(([v, name, sub]) => h('button', {type: 'button', class: 'row', role: 'radio', 'aria-checked': String(p[app.pref] === v), onclick: async () => { if(await actions.prefs({[app.pref]: v}))actions.close(); }}, text(name, sub), h('span', {class: 'blue'}, p[app.pref] === v ? '✓' : ''))))]);
+    modal({quality: '画质', call: '通话麦克风', rail_side: '控制栏位置'}[app.pref], [group(...opts.map(([v, name, sub]) => h('button', {type: 'button', class: 'row', role: 'radio', 'aria-checked': String(p[app.pref] === v), onclick: async () => { if(await actions.prefs({[app.pref]: v}))actions.close(); }}, text(name, sub), h('span', {class: 'blue'}, p[app.pref] === v ? '✓' : ''))))]);
     }
   } else {pictureEditor.reset();clear($('overlay'));}
   const current = $('overlay').querySelector<HTMLElement>('.bottom-sheet');
@@ -310,7 +310,7 @@ function renderPair(): void {
 }
 function authForm(message: string, setup = false): void {
   $('tabs').hidden = true;
-  const input = h('input', {name: 'token', type: 'password', inputmode: 'numeric', pattern: '[0-9]{6}', maxlength: '6', autocomplete: 'off', 'aria-label': '访问令牌', required: true});
+  const input = h('input', {name: 'token', type: 'password', inputmode: 'numeric', pattern: '[0-9]{6}', maxlength: '6', autocomplete: 'off', 'aria-label': '访问码', required: true});
   const msg = h('p', {class: 'foot', role: 'status'}, message);
   const confirm = h('input', {type:'password',inputmode:'numeric',pattern:'[0-9]{6}',maxlength:'6',autocomplete:'new-password','aria-label':'确认访问码',required:setup});
   input.setAttribute('aria-label', setup?'设置访问码':'访问码');

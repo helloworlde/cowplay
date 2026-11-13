@@ -27,7 +27,7 @@ await scenario('late stop ACK must not stop a new authorization',async(s,b,frame
 await scenario('late connect ACK must not navigate away from a newer settings page',async(s,b,frame)=>{
  await s.fixture({mode:'connecting',auth:true,stopped:true,link:{bluetooth:'idle',wifi:'idle',carplay:'idle'}});await b.goto(s.origin+'/car?review=cross-page#settings/phones');await b.wait(()=>b.evaluate("[...document.querySelectorAll('#s-pane button')].some(x=>x.textContent==='连接')"),'saved phones');
  await b.evaluate("window.reviewHold='connect';[...document.querySelectorAll('#s-pane button')].find(x=>x.textContent==='连接').click()");await b.wait(()=>b.evaluate("typeof window.reviewRelease==='function'"),'held connect ACK');
- await b.evaluate("location.hash='settings/audio'");await b.wait(()=>b.evaluate("document.querySelector('#s-pane h1')?.textContent==='通话与声音'"),'newer settings page');await b.evaluate('window.reviewRelease()');await b.evaluate('new Promise(r=>setTimeout(r,250))');await frame();
+ await b.evaluate("location.hash='settings/audio'");await b.wait(()=>b.evaluate("document.querySelector('#s-pane h1')?.textContent==='声音与通话'"),'newer settings page');await b.evaluate('window.reviewRelease()');await b.evaluate('new Promise(r=>setTimeout(r,250))');await frame();
  const after=await b.evaluate("({view:document.body.dataset.view,hash:location.hash,heading:document.querySelector('#s-pane h1')?.textContent})");return {pass:after.view==='settings'&&after.hash==='#settings/audio',after};
 });
 await scenario('a rejected reconnect must leave the existing picture decoding',async(s,b,frame)=>{
@@ -38,7 +38,7 @@ await scenario('a rejected reconnect must leave the existing picture decoding',a
 await scenario('a connect state refresh must not navigate away from a newer page',async(s,b,frame)=>{
  await s.fixture({mode:'connecting',auth:true,stopped:true,link:{bluetooth:'idle',wifi:'idle',carplay:'idle'}});await b.goto(s.origin+'/car?review=poll-navigation#settings/phones');await b.wait(()=>b.evaluate("[...document.querySelectorAll('#s-pane button')].some(x=>x.textContent==='连接')"),'saved phones');
  await s.fixture({stateHold:true});await b.evaluate("[...document.querySelectorAll('#s-pane button')].find(x=>x.textContent==='连接').click()");await b.wait(async()=>(await s.fixture({})).pendingStates>0,'command state refresh held');
- await b.evaluate("location.hash='settings/audio'");await b.wait(()=>b.evaluate("document.querySelector('#s-pane h1')?.textContent==='通话与声音'"),'new page while state pending');await s.fixture({stateHold:false,releaseState:true});await b.evaluate('new Promise(r=>setTimeout(r,250))');await frame();
+ await b.evaluate("location.hash='settings/audio'");await b.wait(()=>b.evaluate("document.querySelector('#s-pane h1')?.textContent==='声音与通话'"),'new page while state pending');await s.fixture({stateHold:false,releaseState:true});await b.evaluate('new Promise(r=>setTimeout(r,250))');await frame();
  const after=await b.evaluate("({view:document.body.dataset.view,hash:location.hash})");return {pass:after.view==='settings'&&after.hash==='#settings/audio',after};
 });
 await scenario('repeated clicks during one pending connect send one command',async(s,b,frame)=>{
