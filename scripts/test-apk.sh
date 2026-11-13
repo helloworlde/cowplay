@@ -19,10 +19,20 @@ https://downloads.openwrt.org/releases/25.12.6/packages/aarch64_generic/packages
 REPOS
 apk --root "$root" --arch aarch64_generic --no-scripts add --initdb procd ubus jsonfilter ca-bundle openssl-util
 printf 'synthetic user state\n' > "$root/etc/cowplay/state/retained-test-data"
-before=$(sha256sum "$root/etc/cowplay/state/retained-test-data")
+for name in config.json access-token clients.json selected-phone signing-seed mfi-certificate tls/cert.pem tls/key.pem bluez/02:00:00:00:00:01/02:00:00:00:00:02/info phone.phones .legacy-migrated tesla/config.json tesla/monitor.key tesla/driver.key cowplay.uci; do
+    file=$root/etc/cowplay/state/$name
+    mkdir -p "$(dirname "$file")"
+    printf 'synthetic retained fixture: %s\n' "$name" > "$file"
+    chmod 600 "$file"
+done
+find "$root/etc/cowplay/state" -type d -exec chmod 700 {} \;
+before=$(find "$root/etc/cowplay/state" -type f -exec sha256sum {} \; | sort)
+permissions=$(find "$root/etc/cowplay/state" -exec stat -c '%a %n' {} \; | sort)
 apk --root "$root" --arch aarch64_generic --no-scripts --no-network --allow-untrusted add "$previous"
 apk --root "$root" --arch aarch64_generic --no-scripts --no-network --allow-untrusted add --upgrade "$package"
-apk --root "$root" info --exists 'cowplay=0.0.2-r6'
+apk --root "$root" info --exists 'cowplay=0.0.2-r7'
+[ "$before" = "$(find "$root/etc/cowplay/state" -type f -exec sha256sum {} \; | sort)" ]
+[ "$permissions" = "$(find "$root/etc/cowplay/state" -exec stat -c '%a %n' {} \; | sort)" ]
 "$root/usr/bin/cowplay" verify-image "$root/usr/bin/cowplay"
 runtime=$root/usr/lib/cowplay/bluez
 (cd "$runtime" && sha256sum -c SHA256SUMS)
@@ -35,6 +45,9 @@ apk --root "$root" --no-scripts --no-network del cowplay
 [ ! -e "$root/usr/bin/cowplay" ]
 [ ! -e "$root/etc/init.d/cowplay" ]
 [ ! -e "$root/usr/lib/cowplay/bluez" ]
-[ "$before" = "$(sha256sum "$root/etc/cowplay/state/retained-test-data")" ]
+[ "$before" = "$(find "$root/etc/cowplay/state" -type f -exec sha256sum {} \; | sort)" ]
+[ "$permissions" = "$(find "$root/etc/cowplay/state" -exec stat -c '%a %n' {} \; | sort)" ]
 apk --root "$root" --arch aarch64_generic --no-scripts --no-network --allow-untrusted add "$package"
+[ "$before" = "$(find "$root/etc/cowplay/state" -type f -exec sha256sum {} \; | sort)" ]
+[ "$permissions" = "$(find "$root/etc/cowplay/state" -exec stat -c '%a %n' {} \; | sort)" ]
 echo APK_NATIVE_INSTALL_UPGRADE_REMOVE_REINSTALL_AND_STATE_RETENTION_PASSED

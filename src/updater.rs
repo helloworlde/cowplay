@@ -1561,6 +1561,26 @@ esac
         }
     }
     #[test]
+    fn release_policy_allows_reviewed_sources_and_rejects_unknown_or_newer_versions() {
+        let policy: Value = serde_json::from_str(include_str!("../packaging/release-policy.json")).unwrap();
+        let mut m = manifest();
+        m.repository = policy["repository"].as_str().unwrap().into();
+        m.version = include_str!("../packaging/VERSION").trim().into();
+        m.tag = release_tag(&m.version);
+        m.upgrade_from = serde_json::from_value(policy["upgrade_from"].clone()).unwrap();
+        assert!(!m.upgrade_from.is_empty(), "remote updates need reviewed source versions");
+        for p in &mut m.packages { p.file = format!("{}-{}-{}.apk", p.name, m.version, p.arch); }
+        let source = Source { repository: m.repository.clone() };
+        let valid = |manifest: &Manifest, old: &str| validate(manifest, &source, &m.tag, "aarch64_generic", "25.12.6", &NAMES.iter().map(|name| ((*name).into(), old.into())).collect());
+        for old in &m.upgrade_from {
+            valid(&m, old).unwrap();
+            let mut missing = m.clone(); missing.upgrade_from.clear();
+            assert!(valid(&missing, old).is_err());
+        }
+        assert!(valid(&m, "0.0.0-r0").is_err());
+        assert!(valid(&m, "99.0.0-r0").unwrap_err().contains("降级"));
+    }
+    #[test]
     fn development_and_stable_releases_never_cross_channels() {
         let stable = json!({"tag_name":"v0.0.2","draft":false,"prerelease":false});
         let dev = json!({"tag_name":"v0.0.3","draft":false,"prerelease":true});
