@@ -87,9 +87,9 @@ Linux 下载器使用明确指定的版本，不自动发现或切换渠道。�
 
 `bluetooth_address_file` 仅 F50 必需；省略 `bluetooth` 永远选 F50，不按运行环境自动切换。`policy` 和旧 `uci_config` 不能同时配置。可用 `{"format":"uci","path":"/var/lib/cowplay/cowplay.uci"}` 保留 UCI 文本格式。策略文件缺失时创建新文件，JSON 权限 0600；JSON 拒绝未知字段、无效枚举、越界画面参数，保存仍复用现有策略语义和原子替换。默认屏幕项沿用 UCI 支持的 quality、call、rail_side；各屏幕完整画面偏好仍在既有屏幕记录中。system 新建策略记录当前配置端口，避免首启／重启地址漂移；已有策略中的 port/domain 是下次启动的地址来源。
 
-可选管理令牌是 **32 个随机字节的 64 位十六进制文本**，与六位投屏令牌分离。按配置示例启用时，须先在目标主机创建该文件，例如由用户本机执行 `umask 077; openssl rand -hex 32 > /var/lib/cowplay/management-token`。文件须由运行服务的用户持有且无组／其他用户权限；读取使用同一 O_NOFOLLOW 文件描述符校验和限长读取。错误配置在任何蓝牙动作前失败。不需要该管理能力时省略 management_token_file。
+可选管理令牌是 **32 个随机字节的 64 位十六进制文本**，与六位投屏令牌分离。按配置示例启用时，须先在目标主机创建该文件，例如在确认目标文件不存在后，由管理员执行 `umask 077; (set -C; openssl rand -hex 32 > /var/lib/cowplay/management-token)`（拒绝覆盖已有文件）。文件须由运行服务的用户持有且无组／其他用户权限；读取使用同一 O_NOFOLLOW 文件描述符校验和限长读取。错误配置在任何蓝牙动作前失败。不需要该管理能力时省略 management_token_file。
 
-通用管理页提供服务／连接状态、画面上限及自动降帧、访问码读取／设置／重置／停用、HTTPS 证书成对验证和热切换；手机控制台继续提供手机配对、切换、屏幕偏好、诊断与日志。管理 POST 必须同时满足独立 Bearer 管理令牌和既有 Origin 校验，普通浏览器 cookie 或投屏令牌不授予维护权限，令牌仅保存在当前页面内存，不进 URL、localStorage 或 sessionStorage。HTTP 端口迁移、系统服务控制、恢复出厂未暴露给管理 HTTP；热点、路由、启动、升级由主机工具负责。DDNS 和其他维护仍可使用同一私有控制 socket；system 的 network 迁移命令会明确拒绝 OpenWrt 专用操作。
+独立管理页 `/manage` 提供服务／连接状态、画面上限及自动降帧、访问码读取／设置／重置／停用、HTTPS 证书成对验证和热切换。Tesla 位于 CarPlay“设置 → Tesla 车辆”（`/car#settings/tesla`），与画面、麦克风共用设置侧栏；车辆管理、配对和空调控制使用同一面板，与接收端管理共用独立管理令牌并在面板内解锁。VIN 保存、启用、配对、车内确认、连接逐步显示，操作前确认且可取消。离开 Tesla 子页停止页面轮询，保留车辆连接，需明确操作“断开”结束连接。手机控制台继续提供手机配对、切换、屏幕偏好、诊断与日志。管理 POST 必须同时满足独立 Bearer 管理令牌和既有 Origin 校验，普通浏览器 cookie 或投屏令牌不授予维护权限，令牌仅保存在当前页面内存，不进 URL、localStorage 或 sessionStorage。HTTP 端口迁移、系统服务控制、恢复出厂未暴露给管理 HTTP；热点、路由、启动、升级由主机工具负责。DDNS 和其他维护仍可使用同一私有控制 socket；system 的 network 迁移命令会明确拒绝 OpenWrt 专用操作。
 
 配置完整后可由管理员执行：
 

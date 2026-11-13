@@ -18,7 +18,7 @@ function metric(value, reading, unit, connected, ttl) {
 // Same step chips and freshness wording as web/src/shared/tesla-management.ts.
 function steps(s) {
     var needsPairing=['not_authorized','authorization_failed','pairing_failed','pairing_timeout','pairing_cancelled'].indexOf(s.phase)>=0, v=s.vehicle||{};
-    var setup=!s.configured||!s.key_ready?'下一步':'', pair=setup?'':s.pairing==='pairing'?'进行中':needsPairing?'下一步':'';
+    var setup=!s.configured||!s.key_ready||!s.enabled?'下一步':'', pair=setup?'':s.pairing==='pairing'?'进行中':needsPairing?'下一步':'';
     var link=setup||pair?'':v.connected&&s.phase==='reading'?'已连接':s.enabled?'下一步':'';
     return [setup,pair,link,(s.climate||{}).authorized?'已授权':'',((s.ultra||{}).climate_control||{}).allowed?'已授权':''];
 }
@@ -89,7 +89,7 @@ return view.extend({
                 if(typeof result.configured!=='boolean'||!result.vehicle)throw Error('未收到完整操作状态，请刷新核对后再重试。');
                 self.data=result;
                 if(method==='tesla_configure'){self.vin.value='';self.dirty=false;}
-                self.feedback.textContent=method==='tesla_configure'?'配置已保存。本机密钥由主机生成或复用；授权和连接结果见实时状态。':method==='tesla_climate_command'?'已返回单次命令结果，请查看车辆确认状态；页面不会推测车辆温度。':'请求已返回，结果以车辆实时状态为准。';self.update();
+                self.feedback.textContent=method==='tesla_configure'?(result.enabled?'配置已保存。请在第 2 步开始车内配对；已有授权可在第 3 步连接。':'VIN 与本机密钥已保存，连接未启用。请勾选“启用 Tesla 连接”并保存，再开始车内配对。'):method==='tesla_climate_command'?'已返回单次命令结果，请查看车辆确认状态；页面不会推测车辆温度。':'请求已返回，结果以车辆实时状态为准。';self.update();
             } catch(e) { if(!self.disposed)self.feedback.textContent='操作结果未确认：'+e.message+'。请核对实时状态后重试。'; }
             finally { self.mutating=false;if(!self.disposed){self.pending=false;self.sync();} }
         }},label);this.buttons.push({button:button,available:available});return button;
@@ -116,7 +116,7 @@ return view.extend({
         var nativeGrant=this.action('tesla-ultra-allow','允许本次 CarPlay 控制空调','tesla_ultra_control',{title:'允许当前 iPhone 控制车辆空调？',description:'允许当前已认证 CarPlay 会话发送空调开关和双区温度命令。不会申请新的车辆权限；换手机、重连、换车或停服后需重新允许，可随时撤销。',confirm:'允许本次会话'},function(){var u=self.data.ultra||{},c=u.climate_control||{};return configured()&&self.climateFresh()&&c.available&&Array.isArray(u.channels)&&u.channels.some(Boolean)&&!c.allowed;},function(){return [true,self.data.ultra.session,self.data.ultra.climate_control.context];});
         var nativeRevoke=this.action('tesla-ultra-revoke','撤销本次 CarPlay 空调控制','tesla_ultra_control',null,function(){return !!((self.data.ultra||{}).climate_control||{}).allowed;},function(){return [false,self.data.ultra.session,self.data.ultra.climate_control.context];});
         this.readings=[];var readings=E('dl',{class:'cw-tesla-readings'},['电量','续航','左前胎压','右前胎压','左后胎压','右后胎压'].map(function(label,i){var dd=E('dd',{id:'tesla-reading-'+i},'—');self.readings.push(dd);return E('div',{},[E('dt',{},label),dd]);}));
-        var form=E('form',{id:'tesla-config-form'},[field('车辆 VIN',this.vin),note('已有 VIN 不会回填。首次或更换车辆时输入完整 VIN；留空会保留已保存车辆。'),field('启用 Tesla 连接',this.enabled),save]);form.addEventListener('submit',function(ev){ev.preventDefault();save.click();});
+        var form=E('form',{id:'tesla-config-form'},[field('车辆 VIN',this.vin),note('已有 VIN 不会回填。首次或更换车辆时输入完整 VIN；留空会保留已保存车辆。'),field('启用 Tesla 连接',this.enabled),note('车内配对前须勾选启用并保存；未启用时只保存车辆与本机密钥。'),E('div',{class:'cw-actions'},[save])]);form.addEventListener('submit',function(ev){ev.preventDefault();save.click();});
         var on=power(true),off=power(false);
         // One primary action per step; others are neutral or negative.
         [[save,'action'],[pair,'action'],[connect,'action'],[query,'action'],[nativeGrant,'action'],[disconnect,'negative'],[nativeRevoke,'negative']].forEach(function(r){r[0].classList.add('cbi-button-'+r[1]);});
@@ -125,7 +125,7 @@ return view.extend({
         var step=function(n,title,children){return E('section',{class:'cbi-section cw-section cw-tesla-step'},[E('h3',{},[E('span',{class:'cw-tesla-no','aria-hidden':'true'},String(n)),E('span',{class:'cw-grow'},title),self.chips[n-1]]),E('div',{class:'cbi-section-node'},children)]);};
         this.freshness=E('p',{id:'tesla-freshness',class:'cw-foot',role:'status'});
         this.version=E('small');this.pill=E('span',{class:'cw-pill'});
-        this.root=E('div',{class:'cw cw-tesla',id:'tesla-management'},shell.styles(this.host,true).concat([shell.header(this.version,E('div',{class:'cw-actions'},[this.pill,E('button',{id:'tesla-refresh',type:'button',class:'btn cbi-button cbi-button-neutral cw-btn',click:function(){self.refresh();}},'刷新状态')])),shell.navigation('tesla'),E('p',{class:'cw-intro'},'按步骤完成配置、车内配对和连接。离开此页后车辆连接保留。'),this.phase,this.feedback,!L.hasViewPermission()?note('当前 LuCI 会话只有读取权限，车辆管理与空调命令不可用。'):null,
+        this.root=E('div',{class:'cw cw-tesla',id:'tesla-management'},shell.styles(this.host,true).concat([shell.header(this.version,E('div',{class:'cw-actions'},[this.pill,E('button',{id:'tesla-refresh',type:'button',class:'btn cbi-button cbi-button-neutral cw-btn',click:function(){self.refresh();}},'刷新状态')])),shell.navigation('tesla'),E('p',{class:'cw-intro'},'按步骤完成配置、车内配对和连接。离开此页后车辆连接保留。'),(this.host.network||{}).origin?E('p',{class:'cw-intro'},[E('a',{id:'tesla-independent-management',href:this.host.network.origin+'/car#settings/tesla',class:'btn cbi-button cbi-button-action cw-btn'},'在车机设置中管理 Tesla'),E('span',{},' 与画面、声音等设置位于同一界面，使用 CowPlay 管理令牌解锁。')]):null,this.phase,this.feedback,!L.hasViewPermission()?note('当前 LuCI 会话只有读取权限，车辆管理与空调命令不可用。'):null,
             step(1,'车辆',[E('div',{class:'cw-card'},[row('已保存的车辆',this.savedVin)]),form]),
             step(2,'车内配对',[note('车辆停稳后开始，在车内屏幕确认本机公钥。只申请读取车辆数据的权限；失败不会清除已有授权。'),this.deadline,E('div',{class:'cw-actions'},[pair,cancel])]),
             step(3,'连接与读数',[E('div',{class:'cw-actions'},[connect,disconnect]),this.freshness,readings]),

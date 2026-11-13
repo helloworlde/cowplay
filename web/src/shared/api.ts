@@ -2,6 +2,12 @@
 export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly data: any = null) { super(message); }
 }
+export async function managementCall(method:string,args:unknown,token:string):Promise<Record<string,any>> {
+  const response=await fetch(`/api/manage/${method}`,{method:'POST',cache:'no-store',credentials:'omit',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(args)});
+  const body=await response.json().catch(()=>({}));
+  if(!response.ok)throw new ApiError(body.error??(response.status===404?'管理入口尚未启用，请在主机上配置管理令牌文件后重启 CowPlay。':`请求失败 (${response.status})`),response.status,body);
+  return body;
+}
 /** Transport/server failures cannot prove whether a save was committed. */
 export function saveError(error:unknown):string {
   if(error instanceof ApiError&&error.status>=400&&error.status<500)return `未保存：${error.message}`;
@@ -144,7 +150,7 @@ export interface DisplayLimits {
   receiver:{min_width:number;min_height:number;max_width:number;max_height:number;dimension_step:number;frame_rates:number[];codecs:string[];resolution_aliases:Record<string,string>};
   iphone:{ranges_known:false;note:string}; requested:Spec|null; observed:null;
 }
-export interface Network { device_name?: string; receiver_name?: string; platform?: string; ssid: string | null; channel: number | null; origin: string; host: string; lan_ip: string | null; luci: string | null; cert_days: number | null; cert_source: string; ddns: { enabled: boolean; provider: string; last_ms: number | null; ok: boolean | null } }
+export interface Network { device_name?: string; receiver_name?: string; platform?: string; management?: string | null; ssid: string | null; channel: number | null; origin: string; host: string; lan_ip: string | null; luci: string | null; cert_days: number | null; cert_source: string; ddns: { enabled: boolean; provider: string; last_ms: number | null; ok: boolean | null } }
 export const getState = () => api<State>('/api/state');
 export const setPrefs = (prefs: Partial<ScreenPrefs>, target?: 'viewer', signal?: AbortSignal, screenId?: string) => api<{ prefs: ScreenPrefs; spec: Spec | null }>('/api/prefs', { body: {prefs,...(target?{target}:{}),...(screenId?{screen_id:screenId}:{})}, signal });
 

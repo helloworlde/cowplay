@@ -99,7 +99,9 @@ ci-browser:
 	python3 scripts/prepare-luci-test-runtime.py "$(LUCI_RUNTIME_DIR)"
 	node scripts/test-access-setup-web.mjs
 	node scripts/test-car-access-web.mjs
+	node scripts/test-car-cache-web.mjs
 	node scripts/test-tesla-navigation-web.mjs
+	node scripts/test-tesla-settings-web.mjs
 	node scripts/test-updater-luci.mjs
 	node scripts/test-luci-operation-ux.mjs
 	node scripts/test-tesla-management-web.mjs
@@ -164,6 +166,7 @@ test-web: web
 	node scripts/test-viewer-ping.mjs
 	node scripts/test-pairing-web.mjs
 	node scripts/test-car-pairing-web.mjs
+	node scripts/test-car-cache-web.mjs
 	node scripts/test-connection-diagnostics-web.mjs
 	node scripts/test-confirmation-web.mjs
 	node scripts/test-phone-operation-ux-web.mjs
@@ -171,6 +174,7 @@ test-web: web
 	node scripts/test-car-operation-ux-web.mjs
 	node scripts/test-playport-alignment-web.mjs
 	node scripts/test-linux-web.mjs
+	node scripts/test-tesla-settings-web.mjs
 	LUCI_RUNTIME_DIR="$(LUCI_RUNTIME_DIR)" node scripts/test-tesla-management-web.mjs
 	node scripts/test-viewer-web.mjs
 

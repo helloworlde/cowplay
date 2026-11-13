@@ -51,6 +51,7 @@ pub(crate) fn router(admin: Arc<Admin>, digest: Option<[u8; 32]>) -> Router {
     let Some(digest) = digest else {
         return Router::new();
     };
+    admin.management_enabled.store(true, std::sync::atomic::Ordering::Release);
     Router::new()
         .route("/api/manage/{method}", post(call))
         .layer(DefaultBodyLimit::max(65536))

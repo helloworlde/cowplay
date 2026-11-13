@@ -1,4 +1,4 @@
-import {receiverName, receiverPlatform, teslaManagementUrl} from '../shared/receiver';
+import {receiverName, receiverPlatform} from '../shared/receiver';
 // 03 · Settings (parked): picture, calls, display, iPhone, devices, diagnosis, about.
 import {$, clear, h} from '../shared/dom';
 import {qrSvg} from '../shared/qr';
@@ -7,6 +7,9 @@ import {linkBusy, phoneModel, phoneWifi, type Phone, type Quality} from '../shar
 import {app, type Tab} from './app';
 import {ago, browserName, minutes, renderManagementEntry, svg, switchRow} from './ui';
 import {openControls, pictureControls, type PictureActions} from './picture';
+import {createTeslaSettings} from './tesla';
+const tesla = createTeslaSettings();
+export const leaveSettings = (clear = false) => tesla.hide(clear);
 
 export interface SettingsActions extends PictureActions {
   cmd(cmd: string, id?: string): Promise<boolean>;
@@ -17,7 +20,7 @@ export interface SettingsActions extends PictureActions {
   control(action:string):void;
   local(): {rw: number; rh: number; hardware: boolean; audio: {rate: number; channels: number} | null; wake: boolean};
 }
-const TITLES: Record<Tab, [string, string]> = {pic: ['画面', '清晰度与流畅度'], audio: ['声音与通话', '只影响这块屏幕'], display: ['显示', '只影响这块屏幕'], phones: ['iPhone', '所有屏幕共用'], devices: ['设备信息', '只读'], diag: ['诊断', '实时数据'], about: ['关于', '']};
+const TITLES: Record<Tab, [string, string]> = {pic: ['画面', '清晰度与流畅度'], audio: ['声音与通话', '只影响这块屏幕'], display: ['显示', '只影响这块屏幕'], phones: ['iPhone', '所有屏幕共用'], tesla: ['Tesla 车辆', '配对、读数与空调控制'], devices: ['设备信息', '只读'], diag: ['诊断', '实时数据'], about: ['关于', '']};
 const QN: Record<Quality, string> = {auto: '自动', smooth: '流畅', sharp: '清晰', custom:'自定义'};
 let shownTab: Tab | null = null, tabsHeight = 0;
 let tabsOwner = '', paneContext = '';
@@ -27,7 +30,7 @@ const group = (...c: (HTMLElement | null)[]) => h('div', {class: 'group'}, ...c)
 
 export function renderTabs(): void {
   const s = app.state, p = s?.me.prefs;
-  renderManagementEntry($('s-admin'), s?.network.luci ?? null, s?.network.platform);
+  renderManagementEntry($('s-admin'), s?.network.management ?? s?.network.luci ?? null, s?.network.platform);
   const tabs = $('s-tabs'), scroll = tabs.scrollTop;
   const owner = s?.me.id ?? '';
   if (tabsOwner === owner && tabs.querySelector('button:active,a:active')) return;
@@ -38,16 +41,13 @@ export function renderTabs(): void {
     ['audio', '声音与通话', 'speaker', 'var(--green)', p ? (p.call === 'bt' ? '不使用屏幕麦克风' : '屏幕麦克风') : ''],
     ['display', '显示', 'layout', '#5E5CE6', p ? (p.rail_side === 'left' ? '左侧' : '右侧') : ''],
     ['phones', 'iPhone', 'phone', 'var(--blue)', s?.phones ? `${online} 台在线` : ''],
+    ['tesla', 'Tesla 车辆', 'vehicle', 'var(--red)', s?.vehicle?.connected ? '已连接' : '配对与控制'],
     ['devices', '设备信息', 'info', 'var(--idle)', ''],
     ['diag', '诊断', 'pulse', 'var(--orange)', '实时数据'],
     ['about', '关于', 'more', 'var(--idle)', s?.version ?? ''],
   ];
   clear(tabs, ...defs.map(([id, label, glyph, color, val, cls]) => h('button', {type: 'button', id: `settings-tab-${id}`, class: 's-tab', 'aria-current': app.tab === id ? 'page' : 'false', onclick: () => { location.hash = `settings/${id}`; }},
     h('span', {class: 's-ico', style: `background:${color}`}, svg(glyph, 18)), h('span', {class: 'lbl'}, label), h('span', {class: `val ${cls ?? ''}`}, val))));
-  const tesla = teslaManagementUrl(s);
-  const vehicle = s?.vehicle, vehicleText = vehicle ? (vehicle.connected ? '已连接' : vehicle.enabled ? '未连接' : '已停用') : '配对与连接';
-  if (tesla) tabs.insertBefore(h('a', {id: 'settings-tesla', class: 's-tab', href: tesla, title: '打开 Tesla 车辆管理'},
-    h('span', {class: 's-ico', style: 'background:var(--red)'}, svg('vehicle', 18)), h('span', {class: 'lbl'}, 'Tesla 车辆'), h('span', {class: 'val'}, vehicleText)), tabs.querySelector('#settings-tab-devices'));
   tabs.scrollTop = scroll;
   // Fade the bottom edge while more groups sit below the fold (compact car screens).
   const more = () => { tabs.classList.toggle('more', tabs.scrollHeight - tabs.scrollTop - tabs.clientHeight > 4); };
@@ -67,7 +67,8 @@ export function renderTabs(): void {
 export function renderPane(a: SettingsActions): void {
   const s = app.state;
   const pane = $('s-pane');
-  const context = `${s?.me.id ?? ''}/${app.tab}`;
+  if (app.tab !== 'tesla' || !s) tesla.hide();
+  const context = `${s?.me.id ?? ''}/${app.tab}${app.tab === 'tesla' ? location.hash : ''}`;
   // Polling must not replace a pressed control before its native click is delivered.
   if (paneContext === context && (pane.querySelector('button:active') ||
       (pane.contains(document.activeElement) && document.activeElement?.matches('select, summary, input')))) return;
@@ -79,6 +80,12 @@ export function renderPane(a: SettingsActions): void {
   const p = s.me.prefs, loc = a.local();
   const body: (HTMLElement | null)[] = [];
   switch (app.tab) {
+    case 'tesla': {
+      const vehicle = tesla.show(s.me.id);
+      if (pane.contains(vehicle)) return;
+      body.push(vehicle);
+      break;
+    }
     case 'pic':
       if(app.everRendered)body.push(h('button',{type:'button',class:'picture-launch',onclick:()=>{a.back();openControls();}},'在控制面板中边看边调 ›'));
       body.push(pictureControls(a,'settings-picture'));
@@ -123,8 +130,9 @@ export function renderPane(a: SettingsActions): void {
       body.push(h('div', {class: 'about-grid'},
         group(...rows.map(([k, v, mono]) => h('div', {class: 'row'}, h('span', {class: 't'}, k), h('span', {class: `val${mono ? ' mono' : ''}`, style: mono ? 'font-size:max(12px,calc(13px*var(--k)))' : ''}, v)))),
         h('div', {class: 'qr-col'},
-          qr(s.network.luci, s.network.platform === 'linux' ? 'CowPlay 管理' : '管理页（OpenWrt LuCI）', s.network.platform === 'linux' ? '画面上限、证书、访问码' : 'Wi‑Fi、证书、DDNS、访问码', '管理页二维码'),
+          qr(s.network.management ?? s.network.luci, s.network.management || s.network.platform === 'linux' ? 'CowPlay 管理' : '管理页（OpenWrt LuCI）', s.network.management || s.network.platform === 'linux' ? '画面上限、证书、访问码、Tesla' : 'Wi‑Fi、证书、DDNS、访问码', '管理页二维码'),
           qr(`${location.origin}/phone`, '手机控制台', '遥控、诊断、日志', '手机控制台二维码'))));
+      body.push(h('a', {id: 'settings-reset-page', class: 'row', href: '/car/reset'}, '清理页面缓存并重新打开'));
       body.push(h('details', {class: 'about-notices', open: noticesOpen},
         h('summary', {}, '开源许可'),
         h('p', {}, 'Based on LIVI by Lasse Heitgres (', h('a', {href: 'https://github.com/f-io/LIVI', target: '_blank', rel: 'noopener noreferrer'}, 'https://github.com/f-io/LIVI'), ')')));

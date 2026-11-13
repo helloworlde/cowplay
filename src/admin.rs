@@ -50,6 +50,7 @@ fn log_storage_check(enabled: bool, storage: &Value) -> (&'static str, String) {
 // ---------- shared state ----------
 
 pub struct Admin {
+    pub(crate) management_enabled: std::sync::atomic::AtomicBool,
     #[cfg(feature = "tesla")]
     pub(crate) tesla: Arc<crate::tesla_ble::management::Manager>,
     pub manager: Arc<Manager>,
@@ -139,6 +140,7 @@ impl Admin {
         let uci_path = policy_store.path().to_owned();
         let public_tls = crate::certificates::public_chain(Path::new(&tls_certificate)).ok();
         let admin = Arc::new(Self {
+            management_enabled: std::sync::atomic::AtomicBool::new(false),
             #[cfg(feature = "tesla")]
             tesla: crate::tesla_ble::management::Manager::new(&state_dir, hub.vehicle.clone()),
             manager,

@@ -72,7 +72,7 @@ await click('#r-sheet');await click('#sheet-stop');assert.equal((await fixture({
  await b.wait(()=>b.evaluate(`wsTrace.slice(${traceAt}).some(e=>Array.isArray(e)&&e[0]==='close')`),'quiet resume transport failure');
  await fixture({rejectWS:false});
  await b.wait(()=>b.evaluate("document.body.dataset.scene==='takeover'"),'quiet retry respects the other screen');
- const hellos=await b.evaluate(`wsTrace.slice(${traceAt}).filter(e=>typeof e==='string'&&e.startsWith('{')).map(e=>JSON.parse(e)).filter(e=>e.build)`);
+ const hellos=await b.evaluate(`wsTrace.slice(${traceAt}).filter(e=>typeof e==='string'&&e.startsWith('{')).map(e=>JSON.parse(e)).filter(e=>typeof e.takeover==='boolean'&&e.window)`);
  assert.ok(hellos.length>=2);assert.ok(hellos.every(e=>e.takeover===false),'quiet-resume retries never inherit prior manual takeover');
  await delay(3500);assert.equal((await fixture({})).wsAttempts,ws0+2,'failed connection and one quiet retry only');
  await fixture({mode:'session'});await b.evaluate("[...document.querySelectorAll('#c-body button')].find(e=>e.textContent.startsWith('在这块屏幕显示')).click()");await confirmation(b);
@@ -80,13 +80,13 @@ await click('#r-sheet');await click('#sheet-stop');assert.equal((await fixture({
  await click('#r-sheet');await click('#sheet-stop');await confirmation(b);await b.wait(()=>b.evaluate("document.body.dataset.scene==='stopped'"),'stopped after quiet retry regression');
  checks.push('quiet-resume retries after transport failure do not inherit a previous manual takeover');}
 
-// An offline screen does not spend retries; returning online restores the actual painted state.
+// An offline hint preserves a reachable local channel and continuing painted frames.
 await fixture({mode:'session'});await b.wait(()=>b.evaluate("!!document.querySelector('#c-body .choice[aria-checked=true]')"),'stopped scene lists saved phones');await b.evaluate("document.querySelector('#c-body .choice[aria-checked=true]').click()");await confirmation(b);await b.wait(()=>b.evaluate("document.body.dataset.view==='session'"),'manual connect after stop');
-await b.evaluate("window.testOnline=false;window.dispatchEvent(new Event('offline'))");const offlineAttempts=(await fixture({})).wsAttempts;await delay(1100);assert.equal((await fixture({})).wsAttempts,offlineAttempts);
-await b.evaluate("window.testOnline=true;window.dispatchEvent(new Event('online'))");await b.wait(()=>b.evaluate("document.querySelector('#cover').hidden&&document.querySelector('#freeze').hidden&&document.body.dataset.view==='session'&&!document.body.classList.contains('stalled')"),'online recovery paints a new frame');checks.push('offline does not spend retries; online paints again');
+const offlineCloses=await b.evaluate("wsTrace.filter(e=>Array.isArray(e)&&e[0]==='close').length");await b.evaluate("window.testOnline=false;window.dispatchEvent(new Event('offline'))");const offlineAttempts=(await fixture({})).wsAttempts;await delay(1100);assert.equal((await fixture({})).wsAttempts,offlineAttempts);assert.equal(await b.evaluate("wsTrace.filter(e=>Array.isArray(e)&&e[0]==='close').length"),offlineCloses);
+await b.evaluate("window.testOnline=true;window.dispatchEvent(new Event('online'))");await b.wait(()=>b.evaluate("document.querySelector('#cover').hidden&&document.querySelector('#freeze').hidden&&document.body.dataset.view==='session'&&!document.body.classList.contains('stalled')"),'reachable local channel stays painted');checks.push('offline/online hints preserve a reachable local channel without closing or reopening it');
 // Initial try plus four exponential retries; handshake alone must not renew the budget.
 // End the previous page before resetting the shared fixture counter; its pending
-// online-recovery attempt must not be counted as this fresh page's first try.
+// viewer must not be counted as this fresh page's first try.
 await b.goto('about:blank');
 await fixture({mode:'connecting',rejectWS:true,resetAttempts:true});await b.goto(origin+'/car?retry-budget');
 await b.wait(()=>b.evaluate("document.querySelector('#c-lead').textContent.includes('自动重连 4 次')"),'four bounded retries',20000);assert.equal((await fixture({})).wsAttempts,5);

@@ -560,6 +560,7 @@ pub fn network(a: &Admin) -> Value {
         "receiver_name": a.manager.advertised_name(),
         "device_name": crate::receiver_name::local_device_name(),
         "luci": if a.openwrt { lan.as_ref().map(|ip| format!("http://{ip}/cgi-bin/luci/admin/services/cowplay")) } else { Some(format!("{}/admin", a.origin)) },
+        "management": a.management_enabled.load(std::sync::atomic::Ordering::Acquire).then(|| format!("{}/manage", a.origin)),
         "cert_days": cert.map(|c| c.0),
         "cert_source": policy.cert_source,
         "ddns": {"enabled": policy.ddns_enabled && policy.ddns_mode=="builtin", "mode":policy.ddns_mode, "provider": policy.ddns_provider, "last_ms": ddns.last_update_ms, "ok": ddns.update_ok},

@@ -7,17 +7,13 @@ export const receiverPlatform = (state: State | null) => state?.network.platform
 export const receiverDevice = (state: State | null) => state?.network.device_name?.trim() || receiverPlatform(state);
 export const managementLocation = (platform?: string) => platform === 'f50' || platform === 'openwrt' ? 'OpenWrt › 服务 › CowPlay' : 'CowPlay 主机管理';
 
-/** Follow the advertised management origin, including a non-default LuCI port. */
+/** Vehicle management lives beside the car page's other settings. */
 export function teslaManagementUrl(state: State | null): string | null {
-  const address = state?.network.luci;
+  const address = state?.network.origin;
   if (!address) return null;
   try {
     const url = new URL(address);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
-    url.hash = '';
-    url.search = '';
-    if (state?.network.platform === 'linux') url.hash = 'tesla-management';
-    else url.pathname = url.pathname.replace(/\/$/, '') + '/tesla';
-    return url.href;
+    return new URL('/car#settings/tesla', url).href;
   } catch { return null; }
 }
