@@ -6,8 +6,6 @@
     "depends": {"acl": ["luci-app-cowplay"]}
   },
   "admin/services/cowplay/tesla": {
-    "title": "Tesla 车辆",
-    "order": 20,
     "action": {"type": "view", "path": "cowplay/tesla"},
     "depends": {"acl": ["luci-app-cowplay"]}
   }

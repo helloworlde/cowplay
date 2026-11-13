@@ -8,9 +8,10 @@
 'require cowplay.network as network';
 'require cowplay.updater as updater';
 'require cowplay.confirmation as confirmation';
+'require cowplay.shell as shell';
 
-var diagnosticTabs = [['checks', '实时数据'], ['info', '设备信息'], ['timeline', '时间线'], ['logs', '日志'], ['proc', '进程与配置']];
-var tabs = [['overview', '概览'], ['devices', '设备与访问'], ['display', '投屏策略'], ['network', '网络与证书']].concat(diagnosticTabs, [['system', '系统']]);
+var diagnosticTabs = shell.diagnosticTabs;
+var tabs = shell.tabs;
 var subtitles = {
     overview: '连接状态、视频传输与会话记录。',
     devices: '管理已保存的 iPhone、屏幕授权和访问码。',
@@ -601,7 +602,7 @@ return view.extend({
                 diag: self.diagBody,
                 system: E('div', {}, [section('服务', self.runtime), forms[3], section('备份与恢复', card([row('CowPlay 配置（不含配件身份）', self.action('下载备份', 'config_export', [], false, function(r) { cp.download('cowplay.uci', r.text); })), row('导入配置', backupInput), importNotice, row('操作', E('div', {class: 'cw-actions'}, [restore])), note('恢复操作会替换 CowPlay 配置并刷新页面，未保存的编辑将丢弃；不修改配对和配件身份。')])), section('GitHub 安装与升级', updater.render(function() { return self.page === 'system'; }, function(busy) { self.updateBusy = busy; if (self.root) self.syncActions(); self.updateFooter(); }, function() { return !self.importRunning && !self.applyPending && ['dirty', 'saved', 'applying', 'reload_failed'].indexOf(self.editState) < 0; }, function() { return self.data && !self.data.error && self.data.build; })), section('关于', self.about)])
             };
-            self.root.append(E('link', {rel: 'stylesheet', href: L.resource('cowplay/style.css')}), E('div', {class: 'cw-head'}, [E('div', {class: 'cw-grow'}, [E('h2', {}, 'CowPlay'), self.version]), self.pill]), E('ul', {class: 'cbi-tabmenu cw-tabs', role: 'tablist', 'aria-label': 'CowPlay 分组'}, tabs.map(function(t) { return E('li', {}, E('a', {href: '#' + t[0], role: 'tab', 'aria-label': t[1], 'data-target': t[0], 'data-diag': diagnosticTabs.some(function(d) { return d[0] === t[0]; }) ? t[0] : null, click: function(ev) { ev.preventDefault(); self.select(t[0]); }}, t[1])); }).concat([E('li', {}, E('a', {href: L.url('admin/services/cowplay/tesla'), 'aria-label': 'Tesla 车辆'}, 'Tesla 车辆'))])), self.intro, self.error);
+            self.root.append.apply(self.root, shell.styles(self.data).concat([shell.header(self.version, self.pill), shell.navigation(self.page === 'diag' ? self.diagTab : self.page, function(route) { self.select(route); }), self.intro, self.error]));
             Object.keys(panes).forEach(function(page) { self.root.append(E('div', {'data-page': page, role: 'tabpanel'}, panes[page])); });
             self.update(); self.select(self.page === 'diag' ? self.diagTab : self.page);
             var markDirty = function(ev) { if (ev.target.closest('.cbi-map') && !ev.target.closest('.cw-pem-editor')) { self.formEpoch++; confirmation.cancel(); self.setEditState('dirty'); } };

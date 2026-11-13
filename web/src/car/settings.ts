@@ -30,7 +30,7 @@ export function renderTabs(): void {
   renderManagementEntry($('s-admin'), s?.network.luci ?? null, s?.network.platform);
   const tabs = $('s-tabs'), scroll = tabs.scrollTop;
   const owner = s?.me.id ?? '';
-  if (tabsOwner === owner && tabs.querySelector('button:active')) return;
+  if (tabsOwner === owner && tabs.querySelector('button:active,a:active')) return;
   tabsOwner = owner;
   const online = (s?.phones ?? []).filter(x => x.online).length;
   const defs: [Tab, string, string, string, string, string?][] = [
@@ -46,8 +46,8 @@ export function renderTabs(): void {
     h('span', {class: 's-ico', style: `background:${color}`}, svg(glyph, 18)), h('span', {class: 'lbl'}, label), h('span', {class: `val ${cls ?? ''}`}, val))));
   const tesla = teslaManagementUrl(s);
   const vehicle = s?.vehicle, vehicleText = vehicle ? (vehicle.connected ? '已连接' : vehicle.enabled ? '未连接' : '已停用') : '配对与连接';
-  if (tesla) tabs.insertBefore(h('a', {id: 'settings-tesla', class: 's-tab', href: tesla, target: '_blank', rel: 'noopener noreferrer', title: '在新标签页打开管理页'},
-    h('span', {class: 's-ico', style: 'background:var(--red)'}, svg('vehicle', 18)), h('span', {class: 'lbl'}, 'Tesla 车辆'), h('span', {class: 'val'}, `${vehicleText} ↗`)), tabs.querySelector('#settings-tab-devices'));
+  if (tesla) tabs.insertBefore(h('a', {id: 'settings-tesla', class: 's-tab', href: tesla, title: '打开 Tesla 车辆管理'},
+    h('span', {class: 's-ico', style: 'background:var(--red)'}, svg('vehicle', 18)), h('span', {class: 'lbl'}, 'Tesla 车辆'), h('span', {class: 'val'}, vehicleText)), tabs.querySelector('#settings-tab-devices'));
   tabs.scrollTop = scroll;
   // Fade the bottom edge while more groups sit below the fold (compact car screens).
   const more = () => { tabs.classList.toggle('more', tabs.scrollHeight - tabs.scrollTop - tabs.clientHeight > 4); };

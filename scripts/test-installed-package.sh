@@ -4,7 +4,7 @@
 set -eu
 package=${1:?local APK path required}
 state=/etc/cowplay/state
-apk info --exists 'cowplay=0.0.2-r5'
+apk info --exists 'cowplay=0.0.2-r6'
 test -s "$state/config.json"
 before=$(sha256sum "$state/config.json" "$state/signing-seed" "$state/accessory.pk8")
 origin=$(jsonfilter -i "$state/config.json" -e '@.receiver.web.origin')
