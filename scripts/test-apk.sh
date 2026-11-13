@@ -30,7 +30,7 @@ before=$(find "$root/etc/cowplay/state" -type f -exec sha256sum {} \; | sort)
 permissions=$(find "$root/etc/cowplay/state" -exec stat -c '%a %n' {} \; | sort)
 apk --root "$root" --arch aarch64_generic --no-scripts --no-network --allow-untrusted add "$previous"
 apk --root "$root" --arch aarch64_generic --no-scripts --no-network --allow-untrusted add --upgrade "$package"
-apk --root "$root" info --exists 'cowplay=0.0.2-r7'
+apk --root "$root" info --exists 'cowplay=0.0.2-r8'
 [ "$before" = "$(find "$root/etc/cowplay/state" -type f -exec sha256sum {} \; | sort)" ]
 [ "$permissions" = "$(find "$root/etc/cowplay/state" -exec stat -c '%a %n' {} \; | sort)" ]
 "$root/usr/bin/cowplay" verify-image "$root/usr/bin/cowplay"

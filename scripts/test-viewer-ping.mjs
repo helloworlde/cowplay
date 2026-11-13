@@ -7,14 +7,14 @@ import ts from '../web/node_modules/typescript/lib/typescript.js';
 const source = ts.createSourceFile('main.ts', fs.readFileSync(new URL('../web/src/car/main.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
 const declarations = [], reports = [];
 function visit(node) {
-  if (ts.isVariableStatement(node) && node.declarationList.declarations.some(d => ['ping', 'send'].includes(d.name.getText(source)))) declarations.push(node.getText(source));
+  if (ts.isVariableStatement(node) && node.declarationList.declarations.some(d => ['ping', 'send', 'lastPong'].includes(d.name.getText(source)))) declarations.push(node.getText(source));
   if (ts.isFunctionDeclaration(node) && ['onPong', 'closeSocket'].includes(node.name?.text)) declarations.push(node.getText(source));
   if (ts.isCallExpression(node) && node.expression.getText(source) === 'setInterval' && node.arguments[0]?.getText(source).includes('ping.sent.set')) declarations.push(node.getText(source));
   if (ts.isObjectLiteralExpression(node) && node.properties.some(p => ts.isPropertyAssignment(p) && p.name.getText(source) === 'type' && p.initializer.getText(source) === "'metrics'")) reports.push(node.properties.find(p => p.name?.getText(source) === 'report').initializer.getText(source));
   ts.forEachChild(node, visit);
 }
 visit(source);
-assert.equal(declarations.length, 5, 'extract the existing ping/send/timer/close paths exactly once');
+assert.equal(declarations.length, 6, 'extract the existing ping/send/timer/close paths and heartbeat state exactly once');
 assert.equal(reports.length, 1, 'extract the actual browser metrics report');
 let now = 0, tick, closed = false;
 const sent = [], context = vm.createContext({performance: {now: () => now}, setInterval: fn => {tick = fn;}, clearTimeout() {}, WebSocket: {OPEN: 1},
@@ -26,13 +26,17 @@ const run = code => vm.runInContext(ts.transpileModule(code, {compilerOptions: {
 run(declarations.join('\n'));
 tick(); assert.equal(sent.length, 0); assert.equal(run('ping.sent.size'), 0, 'an unsent congested ping must not become a pending RTT sample');
 now = 1000; context.socket.bufferedAmount = 0; tick(); assert.equal(sent.length, 1);
-now = 1010; run('onPong()'); assert.equal(run('ping.latest.rtt_ms'), 10); assert.equal(run('ping.sent.size'), 0);
+now = 1010; run('onPong()'); assert.equal(run('lastPong'),1010,'valid pong advances the independent heartbeat deadline'); assert.equal(run('ping.latest.rtt_ms'), 10); assert.equal(run('ping.sent.size'), 0);
 now = 1500; const report = run('(' + reports[0] + ')');
 assert.equal(report.ping.seq, 1); assert.equal(report.ping.rtt_ms, 10); assert.equal(report.ping.age_ms, 490);
 now = 4500; assert.equal(run('(' + reports[0] + ')').ping.age_ms, 3490, 'repeated metrics retain the real sample age');
 run('closeSocket()'); assert.equal(closed, true); assert.equal(run('ping.latest'), null); assert.equal(run('ping.sent.size'), 0);
 assert.equal(run('(' + reports[0] + ')').ping, undefined, 'a new channel cannot report the preceding channel pong');
-console.log(JSON.stringify({passed: true, checks: ['unsent ping is not registered', 'individual pong RTT', 'sample sequence and increasing age', 'channel close clears the sample']}));
+let expiredPeer=null;context.failed=peer=>{expiredPeer=peer;};context.app.channel=true;
+context.socket={readyState:1,bufferedAmount:0,send:data=>sent.push(JSON.parse(data))};run('lastPong=performance.now()');
+now=9500;tick();assert.equal(expiredPeer,null,'exactly five seconds still permits the channel');
+now=9501;const sequence=run('ping.seq');tick();assert.equal(expiredPeer,context.socket,'missing pongs expire the current channel');assert.equal(run('ping.seq'),sequence,'no ping is queued after expiry');
+console.log(JSON.stringify({passed: true, checks: ['heartbeat deadline and exact expiry', 'unsent ping is not registered', 'individual pong RTT', 'sample sequence and increasing age', 'channel close clears the sample']}));
 
 // Replay out-of-order API snapshots through the real statistics polling callback.
 const statsTimers=[];
