@@ -19,7 +19,7 @@ pub(crate) async fn invite_locked(manager: &Manager, hub: &Hub, epoch: u64) -> c
     current(hub, epoch)?;
     tokio::select! {biased;_=hub.phones.changed_since(epoch)=>Err(SUPERSEDED.into()),r=manager.connect()=>{current(hub,epoch)?;r}}
 }
-async fn stop_locked(manager: &Manager, hub: &Hub, epoch: u64) -> crate::RuntimeResult<()> {
+pub(crate) async fn stop_locked(manager: &Manager, hub: &Hub, epoch: u64) -> crate::RuntimeResult<()> {
     current(hub, epoch)?;
     tokio::time::timeout(Duration::from_secs(8), manager.quiesce(epoch))
         .await
@@ -140,16 +140,8 @@ pub async fn connect(
     hub: &Arc<Hub>,
     device: Option<&str>,
 ) -> crate::RuntimeResult<()> {
-    connect_at(manager,hub,device,None).await
-}
-/// A background request keeps its original selection epoch, even after resolving a preferred phone.
-pub(crate) async fn connect_automatically(manager:&Arc<Manager>,hub:&Arc<Hub>,device:Option<&str>,epoch:u64)->crate::RuntimeResult<()> {
-    connect_at(manager,hub,device,Some(epoch)).await
-}
-async fn connect_at(manager:&Arc<Manager>, hub:&Arc<Hub>, device:Option<&str>, expected:Option<u64>) -> crate::RuntimeResult<()> {
     let entry = hub.phones.snapshot();
-    if expected.is_some_and(|epoch|epoch!=entry.epoch) {return Err(SUPERSEDED.into())}
-    let explicit = expected.is_none() && device.is_some();
+    let explicit = device.is_some();
     if !explicit && (manager.pairing_open() || !hub.phones.snapshot().admission) {
         return Err("请先完成当前配对，或在手机连接页选择要连接的手机".into());
     }

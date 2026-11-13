@@ -102,6 +102,8 @@ pub struct Hub {
     config: Mutex<Option<Vec<u8>>>,
     notify: Notify,
     viewer: AtomicBool,
+    viewer_changes: tokio::sync::watch::Sender<bool>,
+    viewer_offline: Mutex<tokio::time::Instant>,
     pending_connections: Arc<tokio::sync::Semaphore>,
     pub clients: Arc<clients::Clients>,
     origin: String,
@@ -378,6 +380,8 @@ impl Hub {
                 config: Mutex::new(None),
                 notify: Notify::new(),
                 viewer: AtomicBool::new(false),
+                viewer_changes: tokio::sync::watch::channel(false).0,
+                viewer_offline: Mutex::new(tokio::time::Instant::now()),
                 pending_connections: Arc::new(tokio::sync::Semaphore::new(8)),
                 clients: Arc::new(clients::Clients::new(&token)),
                 origin,
@@ -619,6 +623,13 @@ impl Hub {
     pub fn viewer_active(&self) -> bool {
         self.viewer.load(Ordering::Acquire)
     }
+    pub fn subscribe_viewer(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.viewer_changes.subscribe()
+    }
+    /// Normal close starts the grace now; a heartbeat timeout already spent that grace.
+    pub fn viewer_offline_since(&self) -> tokio::time::Instant {
+        *self.viewer_offline.lock().unwrap()
+    }
     pub fn origin(&self) -> &str {
         &self.origin
     }
@@ -630,7 +641,9 @@ impl Hub {
         let mut viewer = self.viewer_client.lock().unwrap();
         self.viewer.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).ok()?;
         let generation = self.viewer_generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
-        *viewer = Some(id.to_owned()); Some(generation)
+        *viewer = Some(id.to_owned());
+        self.viewer_changes.send_replace(true);
+        Some(generation)
     }
     pub fn viewer_generation(&self) -> u64 { self.viewer_generation.load(Ordering::Acquire) }
     pub fn media_generation(&self) -> u64 { self.session_epoch.load(Ordering::Acquire) }
@@ -776,11 +789,13 @@ async fn ws_upgrade(
             client(s, h, viewer.id).await
         })
 }
-struct ViewerGuard(Arc<Hub>);
+struct ViewerGuard(Arc<Hub>, Option<tokio::time::Instant>);
 impl Drop for ViewerGuard {
     fn drop(&mut self) {
         let viewer = self.0.viewer_client.lock().unwrap();
+        *self.0.viewer_offline.lock().unwrap() = self.1.unwrap_or_else(tokio::time::Instant::now);
         self.0.viewer.store(false, Ordering::Release);
+        self.0.viewer_changes.send_replace(false);
         drop(viewer);
         *self.0.display_report.lock().unwrap() = "WAITING_BROWSER_REPORT";
         {
@@ -858,7 +873,7 @@ async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
         diag::diag().event("info", "web", "新的车机屏幕接管了显示");
     }
     let generation = generation.unwrap();
-    let _guard = ViewerGuard(h.clone());
+    let mut guard = ViewerGuard(h.clone(), None);
     diag::diag().event("ok", "web", "车机查看通道已连接");
     if !send(&mut socket,Message::Text(serde_json::json!({"type":"hello","build":build_info::BUILD_ID,"protocol":build_info::PROTOCOL}).to_string().into())).await{return}
     let mut epoch = h.session_epoch.load(Ordering::Acquire);
@@ -872,6 +887,7 @@ async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
     let mut reload_epoch = h.reload_epoch.load(Ordering::Acquire);
     let mut authorization_check = tokio::time::interval(Duration::from_secs(1));
     let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(30), Duration::from_secs(30));
+    let mut last_response = tokio::time::Instant::now();
     // Only announce microphone state when an input stream exists or changes.
     let mut mic_epoch = h.mic_epoch.load(Ordering::Acquire);
     if h.mic.lock().unwrap().is_some() && !send(&mut socket, Message::Text(h.mic_state().to_string().into())).await {
@@ -1010,11 +1026,21 @@ async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
             }
         }
         tokio::select! {
-         msg=socket.recv()=>{if !viewer_message(&mut socket,&h,&id,generation,msg,&mut previous).await{return}}
+         msg=socket.recv()=>{
+             let pong = matches!(&msg, Some(Ok(Message::Pong(_))));
+             if !viewer_message(&mut socket,&h,&id,generation,msg,&mut previous).await{return}
+             if pong { last_response=tokio::time::Instant::now(); }
+         }
+         _=tokio::time::sleep_until(last_response + Duration::from_secs(60))=>{
+             guard.1=Some(last_response);
+             return;
+         }
          _=h.notify.notified()=>{},
          _=std::future::ready(()), if had_frame||had_audio=>{},
          _=authorization_check.tick()=>{}
-         _=heartbeat.tick()=>{if !send(&mut socket,Message::Ping(vec![].into())).await{return}}
+         _=heartbeat.tick()=>{
+             if !send(&mut socket,Message::Ping(vec![].into())).await{return}
+         }
         }
     }
 }
@@ -1175,7 +1201,7 @@ mod tests {
         assert_eq!(h.observation()["display"], "BROWSER_FRAME_RENDERED");
         h.display("error");
         assert_eq!(h.observation()["display"], "BROWSER_DISPLAY_ERROR");
-        drop(ViewerGuard(h.clone()));
+        drop(ViewerGuard(h.clone(), None));
         assert_eq!(h.observation()["display"], "WAITING_BROWSER_REPORT");
     }
     #[test]
@@ -1443,6 +1469,48 @@ mod wire_tests {
         connect_async,
         tungstenite::{client::IntoClientRequest, Message as WsMessage},
     };
+    #[tokio::test]
+    async fn viewer_requires_pong_even_when_application_messages_continue() {
+        for pong in [false, true] {
+            let (h, _commands) = Hub::new("synthetic".into(), "https://test.invalid".into());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let app = router(h.clone());
+            let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+            let mut request = format!("ws://{address}/ws").into_client_request().unwrap();
+            request.headers_mut().insert("Origin", "https://test.invalid".parse().unwrap());
+            request.headers_mut().insert("Cookie", test_cookie(&h).parse().unwrap());
+            let (mut ws, _) = connect_async(request).await.unwrap();
+            ws.send(WsMessage::Text(handshake().into())).await.unwrap();
+            assert!(ws.next().await.unwrap().unwrap().to_text().unwrap().contains("hello"));
+            let mut presence = h.subscribe_viewer();
+            assert!(*presence.borrow_and_update());
+            tokio::time::pause();
+            // A Pong between heartbeat ticks must still expire exactly 60 seconds later.
+            tokio::time::advance(Duration::from_secs(1)).await;
+            ws.send(WsMessage::Pong(vec![].into())).await.unwrap();
+            for _ in 0..100 { tokio::task::yield_now().await; }
+            let last_pong = tokio::time::Instant::now();
+            // Do not read further: tungstenite would automatically reply to server Ping.
+            for seconds in [20, 20, 19] {
+                tokio::time::advance(Duration::from_secs(seconds)).await;
+                ws.send(WsMessage::Text(r#"{"type":"ping"}"#.into())).await.unwrap();
+                if pong { ws.send(WsMessage::Pong(vec![].into())).await.unwrap(); }
+                for _ in 0..100 { tokio::task::yield_now().await; }
+            }
+            assert!(h.viewer_active(), "grace before the heartbeat deadline");
+            tokio::time::advance(Duration::from_secs(2)).await;
+            for _ in 0..100 { tokio::task::yield_now().await; }
+            assert_eq!(h.viewer_active(), pong, "application traffic cannot substitute for Pong");
+            if !pong {
+                assert!(!*presence.borrow());
+                assert_eq!(h.viewer_offline_since(), last_pong,
+                    "heartbeat loss carries its original timestamp, without another 60-second grace");
+            }
+            tokio::time::resume();
+            serving.abort();
+        }
+    }
     #[tokio::test]
     async fn auxiliary_audio_does_not_interrupt_music() {
         let (h, _control) = Hub::new("synthetic-token-for-tests-only".into(), "https://test.invalid".into());

@@ -21,6 +21,7 @@ mod display;
 mod http;
 mod log_export;
 mod preferences;
+pub(crate) mod standby;
 pub(crate) mod management;
 #[cfg(feature = "tesla")]
 pub(crate) mod tesla;
@@ -85,6 +86,7 @@ pub struct Admin {
     /// Last-used time per saved iPhone (`phones-used.json`), loaded on first use.
     pub(crate) phone_usage: Mutex<Option<std::collections::BTreeMap<String, u64>>>,
     auto_fps: Mutex<crate::auto_fps::AutoFps>,
+    pub(crate) automatic: Arc<standby::Standby>,
 }
 #[derive(Default, Clone, Serialize)]
 pub(crate) struct DdnsState {
@@ -169,6 +171,7 @@ impl Admin {
             cancelled_pairing_epoch: std::sync::atomic::AtomicU64::new(0),
             phone_usage: Mutex::new(None),
             auto_fps: Mutex::new(crate::auto_fps::AutoFps::default()),
+            automatic: Arc::new(standby::Standby::default()),
         });
         admin.reload()?;
         admin.apply_display(false);
@@ -253,6 +256,7 @@ impl Admin {
     /// closes), then end Bluetooth and CarPlay, keeping the pairing. A failure restores the
     /// previous stop state.
     pub async fn disconnect(&self) -> crate::RuntimeResult<()> {
+        let _manual = self.automatic.manual();
         let was = self.stopped.swap(true, std::sync::atomic::Ordering::AcqRel);
         if let Err(e) = crate::phone_flow::disconnect(&self.manager, &self.hub).await {
             self.stopped.store(was, std::sync::atomic::Ordering::Release);

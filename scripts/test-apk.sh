@@ -22,7 +22,7 @@ printf 'synthetic user state\n' > "$root/etc/cowplay/state/retained-test-data"
 before=$(sha256sum "$root/etc/cowplay/state/retained-test-data")
 apk --root "$root" --arch aarch64_generic --no-scripts --no-network --allow-untrusted add "$previous"
 apk --root "$root" --arch aarch64_generic --no-scripts --no-network --allow-untrusted add --upgrade "$package"
-apk --root "$root" info --exists 'cowplay=0.0.2-r3'
+apk --root "$root" info --exists 'cowplay=0.0.2-r4'
 "$root/usr/bin/cowplay" verify-image "$root/usr/bin/cowplay"
 runtime=$root/usr/lib/cowplay/bluez
 (cd "$runtime" && sha256sum -c SHA256SUMS)

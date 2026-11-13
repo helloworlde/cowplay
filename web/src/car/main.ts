@@ -57,6 +57,7 @@ function syncPairing(): void {
 // ---------------- video channel (verified semantics kept from the previous page) ----------------
 const canvas = $<HTMLCanvasElement>('screen'), freeze = $<HTMLCanvasElement>('freeze');
 let socket: WebSocket | null = null, inputReady = false, retry = 0, retryTimer = 0, deadline = 0;
+let lastChannelMessage = 0;
 /** Reconnecting only because someone else lifted a stop: never take another screen's picture automatically. */
 const ping = {sent: new Map<number, number>(), seq: 0, rtt: [] as number[], lost: [] as boolean[], latest: null as {seq: number; rtt_ms: number; at: number} | null};
 let bytesIn = 0;
@@ -115,6 +116,7 @@ function connectSocket(takeover = false): void {
   next.onopen = () => { if (socket === next) next.send(JSON.stringify({build: BUILD_ID, protocol: PROTOCOL, takeover, window: windowInfo()})); };
   next.onmessage = event => {
     if (socket !== next) return;
+    lastChannelMessage = performance.now();
     if (typeof event.data === 'string') { onText(next, event.data); return; }
     if (!app.channel) return;
     bytesIn += (event.data as ArrayBuffer).byteLength;
@@ -187,6 +189,14 @@ function schedule(): void {
 }
 window.addEventListener('online', () => { if (!socket) { retry = 0; schedule(); } });
 window.addEventListener('offline', () => { clearTimeout(retryTimer); closeSocket(); if (app.everRendered) invalidate('网络暂不可用，恢复后会重新连接'); app.channelError = '网络暂不可用，恢复网络后会重新连接。'; render(); });
+/** A suspended page may return without an online event, after exhausting its old retries. */
+function resumeChannel(): void {
+  if (!app.authorized || app.stopped || app.state?.stopped || app.takeover || app.buildMismatch || !navigator.onLine) return;
+  if (socket && (socket.readyState >= WebSocket.CLOSING || (app.channel && performance.now() - lastChannelMessage > 60_000))) closeSocket();
+  if (!socket) { clearTimeout(retryTimer); retry = 0; connectSocket(false); }
+  void poll();
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resumeChannel(); });
 
 // ---------------- car ⟷ F50 round trip, jitter, loss ----------------
 function onPong(seq?: number): void {
@@ -728,5 +738,5 @@ async function boot(): Promise<void> {
   render();
 }
 window.addEventListener('pagehide', () => { closeSocket(); input.detach(); });
-window.addEventListener('pageshow', () => input.attach());
+window.addEventListener('pageshow', () => { input.attach(); resumeChannel(); });
 void boot();

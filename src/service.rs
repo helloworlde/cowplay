@@ -200,6 +200,7 @@ pub async fn serve(
         })
     };
     let ddns = tokio::spawn(admin.clone().ddns_loop());
+    let automatic = tokio::spawn(admin.clone().run_standby(rx.clone()));
     f50_server::diag_log!(Info, "web", "service started build={}", f50_server::build_info::BUILD_ID);
     let receiver = Receiver {
         credentials: prepared.credentials,
@@ -245,6 +246,8 @@ pub async fn serve(
     #[cfg(feature = "tesla")]
     let vehicle_deadline = shutdown_deadline - Duration::from_secs(3);
     let _ = stop.send(true);
+    // Join the coordinator before stopping BlueZ; no automatic work survives service shutdown.
+    let _ = automatic.await;
     vehicle_expiry.abort();
     let _ = vehicle_expiry.await;
     sampler.abort();

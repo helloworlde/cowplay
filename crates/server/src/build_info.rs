@@ -1,2 +1,2 @@
-pub const BUILD_ID: &str = "cowplay-0.0.2-r3-menu-dismiss-20261112";
+pub const BUILD_ID: &str = "cowplay-0.0.2-r4-standby-20261113";
 pub const PROTOCOL: u32 = 10;

@@ -1289,14 +1289,17 @@ pub(crate) mod recovery_tests {
     const PHONE: &str = "/org/bluez/hci0/dev_00_11_22_33_44_55";
     const OWNER: &str = ":1.42";
     #[derive(Default)]
-    struct Remote {
-        connecting: tokio::sync::Notify,
-        release: tokio::sync::Notify,
-        calls: AtomicUsize,
-        disconnects: AtomicUsize,
-        fail_disconnect: AtomicBool,
-        disconnect_delay_ms: AtomicU64,
-        fail_connect: AtomicBool,
+    pub(crate) struct Remote {
+        pub(crate) connecting: tokio::sync::Notify,
+        pub(crate) release: tokio::sync::Notify,
+        pub(crate) calls: AtomicUsize,
+        pub(crate) disconnects: AtomicUsize,
+        pub(crate) fail_disconnect: AtomicBool,
+        pub(crate) disconnect_delay_ms: AtomicU64,
+        pub(crate) fail_connect: AtomicBool,
+        pub(crate) hold_connect_reply: AtomicBool,
+        connect_pending: AtomicBool,
+        connect_release: tokio::sync::Notify,
         pairing: tokio::sync::Notify,
         pair_calls: AtomicUsize,
         cancel_pairings: AtomicUsize,
@@ -1361,11 +1364,15 @@ pub(crate) mod recovery_tests {
         }
         async fn connect_profile(&self, _uuid: &str) -> zbus::fdo::Result<()> {
             self.0.calls.fetch_add(1, Ordering::SeqCst);
+            self.0.connect_pending.store(true, Ordering::SeqCst);
             self.0.connecting.notify_one();
             if self.0.fail_connect.load(Ordering::SeqCst) {
+                self.0.connect_pending.store(false, Ordering::SeqCst);
                 return Err(zbus::fdo::Error::Failed("synthetic profile connection refused".into()));
             }
-            self.0.release.notified().await;
+            if self.0.hold_connect_reply.load(Ordering::SeqCst) { self.0.connect_release.notified().await; }
+            else { self.0.release.notified().await; }
+            self.0.connect_pending.store(false, Ordering::SeqCst);
             Ok(())
         }
         async fn disconnect(&self) -> zbus::fdo::Result<()> {
@@ -1377,6 +1384,7 @@ pub(crate) mod recovery_tests {
                 ));
             }
             self.0.release.notify_one();
+            if self.0.connect_pending.swap(false, Ordering::SeqCst) { self.0.connect_release.notify_one(); }
             Ok(())
         }
     }
@@ -1525,7 +1533,7 @@ pub(crate) mod recovery_tests {
         assert!(!error.contains("without an RFCOMM channel"), "failed cleanup must not trigger the no-channel retry");
     }
     const OTHER: &str = "/org/bluez/hci0/dev_00_11_22_33_44_66";
-    async fn phones_fixture()->(Arc<Manager>,Connection,Arc<Remote>,Arc<Remote>,Arc<f50_server::Hub>,tempfile::TempDir) {
+    pub(crate) async fn phones_fixture()->(Arc<Manager>,Connection,Arc<Remote>,Arc<Remote>,Arc<f50_server::Hub>,tempfile::TempDir) {
         let (mut manager,server,a)=fixture().await;
         let b=Arc::new(Remote::default());
         server.object_server().at(OTHER,Device(b.clone(),true,"Phone B","phone",None)).await.unwrap();
@@ -1535,6 +1543,13 @@ pub(crate) mod recovery_tests {
         let phones=f50_server::phones::Phones::new(None,None);phones.initialize(Some(PHONE)).unwrap();
         let (hub,_commands)=f50_server::Hub::with_phones("123456".into(),"https://test.invalid".into(),phones);
         (manager,server,a,b,hub,dir)
+    }
+    pub(crate) fn retain_channel(manager: &Manager) -> u64 {
+        let mut state = manager.state.lock().unwrap();
+        state.epoch += 1;
+        let epoch = state.epoch;
+        state.active = Some(Active { epoch, stop: watch::channel(false).0, done: watch::channel(false).0 });
+        epoch
     }
     #[tokio::test]
     async fn new_pairing_scans_classic_bluetooth_and_exposes_cowplay_name() {

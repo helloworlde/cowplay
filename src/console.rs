@@ -634,7 +634,7 @@ pub async fn state(a: &Admin, me: &Client) -> Value {
 fn handoff(rfcomm: bool, session: bool, l: &diag::Link, now_ms: u64) -> bool {
     rfcomm && !session && l.error.is_none() && (l.bluetooth == "active" || l.wifi == "active") && now_ms.saturating_sub(l.updated_ms) < 120_000
 }
-fn handoff_now(a: &Admin) -> bool {
+pub(crate) fn handoff_now(a: &Admin) -> bool {
     handoff(a.manager.status().rfcomm, a.hub.has_phone_session(), &diag().link(), diag::now_ms())
 }
 
@@ -642,6 +642,12 @@ fn handoff_now(a: &Admin) -> bool {
 async fn reconnect(a: &Arc<Admin>, device: Option<String>, automatic_epoch: Option<u64>) -> Result<(), String> {
     if automatic_epoch.is_some_and(|epoch| epoch != a.hub.phones.epoch() || a.stopped.load(Ordering::Acquire)) {
         return Ok(());
+    }
+    if let Some(epoch) = automatic_epoch {
+        if a.hub.has_phone_session() {
+            a.automatic.reinvite_current(a, epoch);
+            return Ok(());
+        }
     }
     let device = device.or_else(|| current_phone(a)).or_else(|| a.manager.fresh_pairing()).or_else(|| {
         let p = a.policy().preferred;
@@ -653,7 +659,10 @@ async fn reconnect(a: &Arc<Admin>, device: Option<String>, automatic_epoch: Opti
         return Ok(());
     }
     match automatic_epoch {
-        Some(epoch) => crate::phone_flow::connect_automatically(&a.manager, &a.hub, device.as_deref(), epoch).await,
+        Some(epoch) => {
+            if let Some(device) = device.or_else(|| a.manager.selected_phone()) { a.automatic.request(a, device, epoch); }
+            Ok(())
+        },
         None => crate::phone_flow::connect(&a.manager, &a.hub, device.as_deref()).await,
     }.map_err(|e| e.to_string())
 }
@@ -682,6 +691,9 @@ pub struct Cmd {
 /// Commands shared by the car, phone and LuCI (ctl). Long phone operations run in the background.
 pub async fn run_cmd(a: &Arc<Admin>, c: Cmd) -> Result<Value, String> {
     let valid_id = |id: &Option<String>| id.as_deref().filter(|d| f50_server::phones::device_component(d).is_ok()).map(str::to_owned).ok_or_else(|| "无效的 iPhone".to_string());
+    let manual = (matches!(c.cmd.as_str(), "switchPhone" | "openPairWindow" | "closePairWindow" | "disconnect")
+        || (matches!(c.cmd.as_str(), "connect" | "reconnect") && c.id.is_some()))
+        .then(|| a.automatic.manual());
     // Only a request naming what to do ends a user disconnect; the car's periodic id-less "connect"
     // and its stall-recovery "reconnect" are automation and must not call a phone back.
     if matches!(c.cmd.as_str(), "switchPhone" | "openPairWindow") || (matches!(c.cmd.as_str(), "connect" | "reconnect") && c.id.is_some()) {
@@ -696,9 +708,11 @@ pub async fn run_cmd(a: &Arc<Admin>, c: Cmd) -> Result<Value, String> {
             let a = a.clone();
             let id = c.id.clone();
             tokio::spawn(async move {
-                if let Err(e) = reconnect(&a, id, automatic_epoch).await {
+                let _manual = manual;
+                if let Err(e) = reconnect(&a, id.clone(), automatic_epoch).await {
                     f50_server::diag_log!(Warn, "bt", "reconnect failed: {e}");
                 }
+                if let (Some(manual), Some(id)) = (&_manual, &id) { manual.selected(&a, id); }
             });
             Ok(json!({"accepted": true}))
         }
@@ -716,9 +730,17 @@ pub async fn run_cmd(a: &Arc<Admin>, c: Cmd) -> Result<Value, String> {
             } };
             let a = a.clone();
             tokio::spawn(async move {
+                let _manual = manual;
                 let result = match automatic_epoch {
-                    Some(epoch) => crate::phone_flow::connect_automatically(&a.manager, &a.hub, id.as_deref(), epoch).await,
-                    None => crate::phone_flow::connect(&a.manager, &a.hub, id.as_deref()).await,
+                    Some(epoch) => {
+                        if let Some(id) = id { a.automatic.request(&a, id, epoch); }
+                        Ok(())
+                    },
+                    None => {
+                        let r = crate::phone_flow::connect(&a.manager, &a.hub, id.as_deref()).await;
+                        if let (Some(manual), Some(id)) = (&_manual, &id) { manual.selected(&a, id); }
+                        r
+                    },
                 };
                 if let Err(e) = result {
                     f50_server::diag_log!(Info, "bt", "connect: {e}");
@@ -730,10 +752,12 @@ pub async fn run_cmd(a: &Arc<Admin>, c: Cmd) -> Result<Value, String> {
             let id = valid_id(&c.id)?;
             let a = a.clone();
             tokio::spawn(async move {
+                let _manual = manual;
                 diag().event("info", "bt", "切换 iPhone");
                 if let Err(e) = crate::phone_flow::connect(&a.manager, &a.hub, Some(&id)).await {
                     f50_server::diag_log!(Warn, "bt", "switch failed: {e}");
                 }
+                if let Some(manual) = &_manual { manual.selected(&a, &id); }
             });
             Ok(json!({"accepted": true}))
         }

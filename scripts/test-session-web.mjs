@@ -92,6 +92,25 @@ await fixture({mode:'connecting',rejectWS:true,resetAttempts:true});await b.goto
 await b.wait(()=>b.evaluate("document.querySelector('#c-lead').textContent.includes('自动重连 4 次')"),'four bounded retries',20000);assert.equal((await fixture({})).wsAttempts,5);
 await delay(1100);assert.equal((await fixture({})).wsAttempts,5);checks.push('exactly four automatic retries, then explicit recovery');
 await fixture({mode:'session',rejectWS:false});await b.evaluate("[...document.querySelectorAll('#c-body button')].find(e=>e.textContent==='重新连接').click()");await confirmation(b);await b.wait(()=>b.evaluate("document.body.dataset.view==='session'"),'manual recovery after retry exhaustion');checks.push('manual reconnect paints after exhausted budget');
+// Returning from a suspended page has no guarantee of an `online` event.
+await b.goto('about:blank');
+await fixture({mode:'connecting',rejectWS:true,resetAttempts:true});await b.goto(origin+'/car?standby-return');
+await b.wait(()=>b.evaluate("document.querySelector('#c-lead').textContent.includes('自动重连 4 次')"),'standby return starts with an exhausted retry budget',20000);
+assert.equal((await fixture({})).wsAttempts,5);
+await fixture({mode:'session',rejectWS:false});
+await b.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));document.dispatchEvent(new Event('visibilitychange'))");
+await b.wait(()=>b.evaluate("document.body.dataset.view==='session'&&document.querySelector('#cover').hidden&&document.querySelector('#freeze').hidden"),'page return paints without online or manual connect');
+assert.equal((await fixture({})).wsAttempts,6,'pageshow and visibility recovery share one socket');
+checks.push('page return resets an exhausted channel budget once and paints without online');
+await click('#r-sheet');await click('#sheet-stop');await confirmation(b);
+await b.wait(()=>b.evaluate("document.body.dataset.scene==='stopped'"),'manual stop before page return');
+const stoppedAttempts=(await fixture({})).wsAttempts,stoppedCommands=(await fixture({})).cmds.length;
+await b.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('online'))");
+await delay(2200);
+assert.equal((await fixture({})).wsAttempts,stoppedAttempts,'page return cannot reopen a manually stopped channel');
+assert.equal((await fixture({})).cmds.length,stoppedCommands,'page return cannot call a manually disconnected phone');
+checks.push('manual stop survives pageshow, visibility and online events');
+await fixture({mode:'session',stopped:false});await b.wait(()=>b.evaluate("document.body.dataset.view==='session'"),'explicit stop lifted by fixture for remaining authorization tests');
 // Repeated authorization loss returns to one keypad, without duplicate key handlers.
 for(let i=0;i<2;i++){
  await fixture({auth:false});await b.wait(()=>b.evaluate("!document.querySelector('#token-layer').hidden"),'revoked authorization keypad');assert.equal(await b.evaluate("document.querySelectorAll('#keys button').length"),12);
