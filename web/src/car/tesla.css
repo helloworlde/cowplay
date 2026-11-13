@@ -1,0 +1,31 @@
+.tesla-settings{display:flex;flex-direction:column;gap:14px;min-width:0}
+.tesla-settings [hidden]{display:none!important}
+.tesla-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.tesla-panels{flex:1;min-width:260px}.tesla-panels button[aria-selected=true]{background:var(--group2);box-shadow:0 1px 4px #0004}
+.tesla-toolbar-actions{display:flex;align-items:center;gap:14px}.tesla-lock{color:var(--sec);min-height:44px;font-size:14px}
+.tesla-settings .tesla-vehicle-icon,.tesla-unlock-icon{display:flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:12px;background:#ff453a20;color:var(--red);flex-shrink:0}
+.tesla-vehicle-row{min-height:80px}.tesla-vehicle-row .t{gap:7px}.tesla-connection{padding:6px 10px;border-radius:999px;background:var(--group2);color:var(--sec);font-size:13px;white-space:nowrap}.tesla-connection.connected{background:#30d15820;color:var(--green)}
+.tesla-empty,.tesla-unlock{align-items:flex-start;gap:14px;padding:24px}.tesla-settings h2{font-size:20px;margin:0}.tesla-empty p,.tesla-unlock p{margin:0;line-height:1.6}
+.tesla-unlock{max-width:650px}.tesla-unlock .manage-field{width:100%}.tesla-inline-feedback:empty{display:none}
+.tesla-settings .tesla-primary,.tesla-settings .primary{display:flex;align-items:center;justify-content:center;min-height:46px;padding:12px 18px;border-radius:10px;background:var(--blue-fill);color:#fff;font-size:15px;font-weight:600}
+.tesla-settings .manage-field{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:14px 0;line-height:1.5;font-size:15px}
+.tesla-settings input:not([type=checkbox]){width:58%;min-width:0;padding:12px;background:var(--bg);color:var(--label);border:1px solid var(--sep);border-radius:9px;font:inherit}
+.tesla-settings input[type=checkbox]{appearance:none;position:relative;width:50px;height:30px;border:0;border-radius:999px;background:var(--gray3);flex-shrink:0;cursor:pointer}.tesla-settings input[type=checkbox]::after{content:"";position:absolute;left:3px;top:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .15s}.tesla-settings input[type=checkbox]:checked{background:var(--green)}.tesla-settings input[type=checkbox]:checked::after{transform:translateX(20px)}
+.tesla-settings .tesla-management{margin:0;padding:0;min-width:0}
+.tesla-settings .tesla-management .tesla-step{margin:0;background:var(--group);border:0;border-radius:14px;padding:20px;min-width:0}
+.tesla-settings .tesla-management .tesla-step+section:not([hidden]){margin-top:14px}
+.tesla-settings .tesla-management h3{margin:0 0 14px;font-size:17px;line-height:1.4}
+.tesla-settings .tesla-in-car>.tesla-phase{font-size:14px;color:var(--sec);margin:0 0 12px}
+.tesla-settings .tesla-in-car>.lead{font-size:14px;line-height:1.6;margin:0 0 14px}
+.tesla-settings .tesla-step>.lead{font-size:13px;color:var(--sec);line-height:1.6;margin:12px 0}
+.tesla-settings .tesla-actions{gap:10px;margin:8px 0}.tesla-settings .action{min-height:46px;border-radius:10px;padding:10px 14px;background:var(--group2);font-size:15px;font-weight:600}.tesla-settings .action.destructive{color:var(--red)}
+.tesla-settings .tesla-step>.primary{width:100%;margin:12px 0 0}
+.tesla-settings .tesla-readings{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px}
+.tesla-settings .tesla-reading{border:0;background:var(--group2);padding:16px}.tesla-settings .tesla-reading dd{font-size:24px;font-weight:600}
+.tesla-settings[data-panel=vehicle] .tesla-step-no,.tesla-settings[data-panel=controls] .tesla-step-no{display:none}
+.tesla-settings .tesla-details{background:var(--group);border:0;border-radius:14px;padding:4px 18px;margin-top:14px}
+.tesla-back{align-self:flex-start;color:var(--blue-text);min-height:44px;padding:0 4px;font-size:15px}
+@media(max-width:900px){.tesla-settings .tesla-readings{grid-template-columns:repeat(2,minmax(0,1fr))}.tesla-toolbar-actions{margin-left:auto}}
+@media(max-width:680px){.tesla-settings .tesla-management .tesla-step{padding:16px}.tesla-settings .manage-field{align-items:flex-start;flex-direction:column;gap:8px}.tesla-settings input:not([type=checkbox]){width:100%}.tesla-panels{min-width:0;width:100%;flex-basis:100%}.tesla-settings .tesla-reading dd{font-size:20px}.tesla-empty,.tesla-unlock{padding:20px}}
+
+.tesla-settings #tesla-feedback[data-kind=status]{display:none}

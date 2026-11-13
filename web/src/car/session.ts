@@ -148,7 +148,7 @@ export function renderSheet(a: SessionActions): void {
   $('sheet').hidden = !app.sheet || app.view !== 'session';
   if ($('sheet').hidden) return;
   const s = app.state!, p = s.me.prefs;
-  renderManagementEntry($('sheet-admin'), s.network.luci, s.network.platform);
+  renderManagementEntry($('sheet-admin'), s.network.management ?? s.network.luci, s.network.platform);
   const phones = (s.phones ?? []).filter(x => x.online || x.current);
   const shown=(phones.length ? phones : (s.phones ?? []).slice(0, 2)).slice(0,3);
   const nextPhonesKey=JSON.stringify([s.me.id,shown.map(x=>[x.id,x.name,x.online,x.current])]);

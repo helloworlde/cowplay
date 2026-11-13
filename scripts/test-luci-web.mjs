@@ -65,9 +65,10 @@ await click('投屏策略');
 const themeMetrics=()=>b.evaluate("(()=>{const c=getComputedStyle(document.querySelector('.cw')),body=getComputedStyle(document.body),btn=getComputedStyle(document.querySelector('.cw-footer .cbi-button-save'));return {font:c.fontFamily,inheritedFont:body.fontFamily,text:c.color,bodyText:body.color,body:body.backgroundColor,button:btn.backgroundColor}})()");
 const light=await themeMetrics();assert.equal(light.font,light.inheritedFont);assert.equal(light.text,light.bodyText);shots.push(await b.shot('luci-bootstrap-light'));
 await b.evaluate("document.documentElement.dataset.darkmode='true'");await delay(120);const dark=await themeMetrics();assert.notEqual(dark.body,light.body);assert.notEqual(dark.text,light.text);assert.equal(dark.text,dark.bodyText);shots.push(await b.shot('luci-bootstrap-dark'));checks.push('Bootstrap light/dark typography and surfaces follow the theme live');
-await b.evaluate("new Promise((resolve,reject)=>{document.documentElement.dataset.darkmode='false';const l=document.getElementById('luci-theme');l.onload=()=>resolve(true);l.onerror=()=>reject(Error('Material theme missing'));l.href='/themes/material.css'})");
+await b.evaluate("document.documentElement.dataset.darkmode='false';document.getElementById('luci-theme').href='/themes/material.css'");
+await b.wait(()=>b.evaluate("(()=>{const l=document.getElementById('luci-theme');return l.sheet&&l.sheet.href===l.href&&l.sheet.cssRules.length>0&&[...l.sheet.cssRules].filter(r=>r.type===CSSRule.IMPORT_RULE).every(r=>r.styleSheet!==null)})()"),'Material stylesheet and imports loaded');
 // Compare settled theme styles instead of sampling a partially started transition.
-await b.evaluate("(async()=>{const button=document.querySelector('.cw-footer .cbi-button-save');getComputedStyle(button).backgroundColor;await Promise.all(button.getAnimations().filter(a=>a.effect&&a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})))})()");
+await b.wait(()=>b.evaluate("document.querySelector('.cw-footer .cbi-button-save').getAnimations().filter(a=>a.effect&&a.effect.getComputedTiming().iterations!==Infinity).every(a=>!a.pending&&a.playState!=='running')"),'current Material controls settled');
 const material=await themeMetrics();assert.equal(material.font,material.inheritedFont);assert.equal(material.text,material.bodyText);assert.notEqual(material.button,light.button);shots.push(await b.shot('luci-material-display'));checks.push('Material native controls and typography follow a different theme');
 await b.viewport(390,844);assert.ok(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'),'Material mobile no document overflow');shots.push(await b.shot('luci-material-390'));checks.push('LuCI mobile navigation and forms remain usable');
 for(const title of ['概览','设备与访问','投屏策略','网络与证书','实时数据','设备信息','时间线','日志','进程与配置','系统']){await click(title);await noNullChildren();assert.ok(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'),'mobile '+title+' has no document overflow');shots.push(await b.shot('luci-mobile-'+title));}
@@ -78,7 +79,8 @@ await b.wait(()=>b.evaluate("document.querySelectorAll('.cw-sample').length===11
 const pairedReadings=()=>b.evaluate("[...document.querySelectorAll('.cw-sample')].every(e=>{const k=e.querySelector('dt').getBoundingClientRect(),v=e.querySelector('dd').getBoundingClientRect();return Math.abs(k.top-v.top)<4&&v.left>=k.right+8&&k.left>=0&&v.right<=innerWidth})");
 assert.ok(await pairedReadings(),'Material mobile keeps each label beside its complete measured value');
 shots.push(await b.shot('luci-material-measurements-390'));
-await b.evaluate("new Promise((resolve,reject)=>{const l=document.getElementById('luci-theme');l.onload=()=>resolve(true);l.onerror=()=>reject(Error('Bootstrap theme missing'));l.href='/themes/bootstrap.css'})");
+await b.evaluate("document.getElementById('luci-theme').href='/themes/bootstrap.css'");
+await b.wait(()=>b.evaluate("(()=>{const l=document.getElementById('luci-theme');return l.sheet&&l.sheet.href===l.href&&l.sheet.cssRules.length>0})()"),'Bootstrap stylesheet loaded');
 assert.ok(await pairedReadings(),'Bootstrap mobile keeps each label beside its complete measured value');
 shots.push(await b.shot('luci-bootstrap-measurements-390'));
 checks.push('measurement label/value pairs remain on one readable row in both mobile themes');

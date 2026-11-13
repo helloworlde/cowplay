@@ -3,7 +3,6 @@ import {AudioEngine} from '../audio';
 import {VideoPlayer} from '../video';
 import {InputController} from '../input';
 import {parseWireMessage} from '../protocol';
-import {BUILD_ID, PROTOCOL} from '../build';
 import {$, h} from '../shared/dom';
 import {ApiError, admit, api, authStatus, setupAccess, setupOpenAccess, getDiag, getState, getStats, linkBusy, pairingActive, pairingCode, pairingFinishing, recentLinkError, runSegments, saveError, targetPhone, sendCmd, setPrefs as postPrefs, type ScreenPrefs, type State} from '../shared/api';
 import {NearbyPhones, PairingConfirmation} from '../shared/pairing';
@@ -13,7 +12,7 @@ import {MicUplink} from './mic';
 import {app, onRender, phonesOf, render, type Tab} from './app';
 import {fitConnect, renderConnect, scene, setupKeypad, type ConnectActions} from './connect';
 import {fitCanvas, layout, pushHistory, region, renderRail, renderSheet, renderStall, renderStats, type Local} from './session';
-import {renderPane, renderTabs, type SettingsActions} from './settings';
+import {renderPane, renderTabs, leaveSettings, type SettingsActions} from './settings';
 import {browserName, hydrateIcons, scale, toast} from './ui';
 import {openControls, renderControlMetrics, resetPictureDraft} from './picture';
 import {probeHevc} from '../shared/picture-editor';
@@ -29,6 +28,7 @@ const diagnosticContext=(state:State|null)=>JSON.stringify([state?.me.id,state?.
 function clearDiagnostics():void{segmentsRequest=null;app.segments=null;app.segmentsRunning=false;app.diag=null;}
 
 function authorizationChanged(): void {
+  leaveSettings(true);
   cancelConfirmation(); authorization++; commandSequence++; pendingCommands.clear(); pendingSave = null; resetPictureDraft(); clearDiagnostics();
   app.state = null;
   app.stats = null; app.statsAt = 0; app.statsError = '';
@@ -57,7 +57,7 @@ function syncPairing(): void {
 // ---------------- video channel (verified semantics kept from the previous page) ----------------
 const canvas = $<HTMLCanvasElement>('screen'), freeze = $<HTMLCanvasElement>('freeze');
 let socket: WebSocket | null = null, inputReady = false, retry = 0, retryTimer = 0, deadline = 0;
-let lastChannelMessage = 0;
+let lastChannelMessage = 0, lastPong = 0;
 /** Reconnecting only because someone else lifted a stop: never take another screen's picture automatically. */
 const ping = {sent: new Map<number, number>(), seq: 0, rtt: [] as number[], lost: [] as boolean[], latest: null as {seq: number; rtt_ms: number; at: number} | null};
 let bytesIn = 0;
@@ -107,13 +107,13 @@ function closeSocket(): void {
 }
 function windowInfo() { const r = region(k); return {w: r.w, h: r.h, dpr: devicePixelRatio, rw: r.rw, rh: r.rh}; }
 function connectSocket(takeover = false): void {
-  if (!app.authorized || app.stopped || !navigator.onLine || app.buildMismatch) return;
+  if (!app.authorized || app.stopped) return;
   app.channelError = null;
   closeSocket();
   const next = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   socket = next; next.binaryType = 'arraybuffer';
   deadline = window.setTimeout(() => failed(next), 8000);
-  next.onopen = () => { if (socket === next) next.send(JSON.stringify({build: BUILD_ID, protocol: PROTOCOL, takeover, window: windowInfo()})); };
+  next.onopen = () => { if (socket === next) next.send(JSON.stringify({takeover, window: windowInfo()})); };
   next.onmessage = event => {
     if (socket !== next) return;
     lastChannelMessage = performance.now();
@@ -147,17 +147,11 @@ function onText(next: WebSocket, text: string): void {
     }
     if (m.code === 'VIEWER_BUSY') { closeSocket(); app.takeover = {deadline: null}; render(); return; }
     if (m.code === 'VIEWER_REPLACED') { invalidate('画面已切到另一块屏幕'); closeSocket(); app.takeover = {deadline: null}; setView('connect'); return; }
-    if (m.code === 'CLIENT_BUILD_MISMATCH') {
-      closeSocket();
-      // A stale bundle must never create a reload → keypad → reload loop.
-      app.channelError = '页面版本已更新，请刷新页面';
-      app.buildMismatch = true;
-      invalidate(app.channelError); setView('connect'); render(); return;
-    }
     failed(next); return;
   }
   if (m.type === 'hello') {
     clearTimeout(deadline); deadline = 0; app.channel = true; app.takeover = null;
+    lastPong = performance.now();
     if (!app.connectingSince) app.connectingSince = Date.now();
     reportCaps(); void poll(); render(); return;
   }
@@ -181,17 +175,16 @@ function failed(next: WebSocket): void {
 function schedule(): void {
   clearTimeout(retryTimer);
   if (!app.authorized || app.stopped || app.takeover) return;
-  if (!navigator.onLine) { app.channelError = '网络暂不可用，恢复网络后会重新连接。'; render(); return; }
   if (retry >= 4) { app.channelError = '自动重连 4 次仍未成功，请检查网络后点“重新连接”。'; render(); return; }
   const s = Math.min(8, 2 ** retry); retry++;
   retryTimer = window.setTimeout(() => connectSocket(false), s * 1000);
   render();
 }
 window.addEventListener('online', () => { if (!socket) { retry = 0; schedule(); } });
-window.addEventListener('offline', () => { clearTimeout(retryTimer); closeSocket(); if (app.everRendered) invalidate('网络暂不可用，恢复后会重新连接'); app.channelError = '网络暂不可用，恢复网络后会重新连接。'; render(); });
+window.addEventListener('offline', () => { void poll(); });
 /** A suspended page may return without an online event, after exhausting its old retries. */
 function resumeChannel(): void {
-  if (!app.authorized || app.stopped || app.state?.stopped || app.takeover || app.buildMismatch || !navigator.onLine) return;
+  if (!app.authorized || app.stopped || app.state?.stopped || app.takeover) return;
   if (socket && (socket.readyState >= WebSocket.CLOSING || (app.channel && performance.now() - lastChannelMessage > 60_000))) closeSocket();
   if (!socket) { clearTimeout(retryTimer); retry = 0; connectSocket(false); }
   void poll();
@@ -203,6 +196,7 @@ function onPong(seq?: number): void {
   const at = seq !== undefined ? ping.sent.get(seq) : [...ping.sent.values()][0];
   if (at === undefined) return;
   const received = performance.now(), sampleSeq = seq ?? [...ping.sent.keys()][0];
+  lastPong = received;
   ping.latest = {seq: sampleSeq!, rtt_ms: received - at, at: received};
   ping.sent.delete(sampleSeq);
   ping.rtt.push(received - at); if (ping.rtt.length > 30) ping.rtt.shift();
@@ -211,8 +205,8 @@ function onPong(seq?: number): void {
 setInterval(() => {
   if (!app.channel) return;
   const now = performance.now();
+  if (now - lastPong > 5000) { failed(socket!); return; }
   for (const [seq, at] of ping.sent) if (now - at > 3000) { ping.sent.delete(seq); ping.lost.push(true); if (ping.lost.length > 60) ping.lost.shift(); }
-  if (ping.sent.size > 4) { failed(socket!); return; }
   if (send({type: 'ping'})) ping.sent.set(++ping.seq, now);
   const r = ping.rtt;
   const fresh = ping.latest !== null && now - ping.latest.at < 3000;
@@ -411,7 +405,6 @@ async function addPhone(): Promise<void> {
   });
 }
 async function takeoverNow(): Promise<void> {
- if(app.buildMismatch){location.reload();return;}
  const context=interactionContext(),current=()=>app.authorized&&interactionContext()===context;
  // VIEWER_BUSY also occurs between tabs sharing the same browser authorization.
  const other=!!app.takeover||!!app.state?.viewer&&app.state.viewer.id!==app.state.me.id;
@@ -423,7 +416,7 @@ const connectActions: ConnectActions = {
   pick: pickPhone,
   openChoose() { const s = app.state; app.choose = {manual: true, picked: phonesOf(s).find(p => p.current || p.preferred)?.id ?? null, deadline: 0}; render(); },
   // Retry the phone that was being called (e.g. a just-paired one), not whichever is preferred.
-  async retry() { if(app.buildMismatch){location.reload();return;} await manualCommand('connect',targetPhone(app.state)?.id,()=>{retry=0;app.channelError=null;if(!socket)connectSocket(false);app.connectingSince=Date.now();lastCall=Date.now();void poll();render();}); },
+  async retry() { await manualCommand('connect',targetPhone(app.state)?.id,()=>{retry=0;app.channelError=null;if(!socket)connectSocket(false);app.connectingSince=Date.now();lastCall=Date.now();void poll();render();}); },
   takeoverNow,
   keep() {
     if (app.takeover) app.takeover = {deadline: null};
@@ -561,7 +554,7 @@ function route(): void {
   const m = /^#settings(?:\/(\w+))?/.exec(location.hash);
   if (m) {
     if (!app.authorized) { history.replaceState(null, '', location.pathname); render(); return; }
-    if (m[1] && ['pic', 'audio', 'display', 'phones', 'devices', 'diag', 'about'].includes(m[1])) app.tab = m[1] as Tab;
+    if (m[1] && ['pic', 'audio', 'display', 'phones', 'tesla', 'devices', 'diag', 'about'].includes(m[1])) app.tab = m[1] as Tab;
     setView('settings');
   } else setView(app.rendered ? 'session' : 'connect');
 }
@@ -601,7 +594,6 @@ stopBtn.addEventListener('click', async () => {
   });
 });
 async function reconnect(): Promise<void> {
-  if (app.buildMismatch) { location.reload(); return; }
   if(!socket||!app.channel){await takeoverNow();return;}
   await manualCommand('reconnect',undefined,()=>{
     app.stall=null;app.connectingSince=Date.now();toast('已请求重新连接 iPhone，配对保留');void poll();
@@ -689,7 +681,7 @@ onRender(() => {
   if (app.view === 'connect') renderConnect(connectActions);
   if (app.view === 'session') { renderSheet({setPrefs, audioControls:settingsActions.audioControls, control:settingsActions.control, setLimits:p=>void setLimits(p), switchPhone: id => void settingsActions.cmd('switchPhone', id), settings: t => { location.hash = t ? `settings/${t}` : 'settings'; }}); renderRail(); renderStats(local()); }
   const st=player.stats();renderControlMetrics({width:st.width,height:st.height,fps:st.fps,codec:player.codecName});
-  if (app.view === 'settings') { renderTabs(); renderPane(settingsActions); }
+  if (app.view === 'settings') { renderTabs(); renderPane(settingsActions); } else leaveSettings();
   syncPairing();
   if (app.view === 'connect') fitConnect();
   if (focused?.isConnected && focused !== document.body) focused.focus({preventScroll: true});
@@ -744,3 +736,5 @@ async function boot(): Promise<void> {
 window.addEventListener('pagehide', () => { closeSocket(); input.detach(); });
 window.addEventListener('pageshow', () => { input.attach(); resumeChannel(); });
 void boot();
+
+window.addEventListener('pagehide', () => leaveSettings(true));

@@ -9,7 +9,7 @@ assert.ok(process.env.LUCI_RUNTIME_DIR, 'official LuCI runtime required');
 const menu=JSON.parse(fs.readFileSync(new URL('../luci-app-cowplay/root/usr/share/luci/menu.d/luci-app-cowplay.json',import.meta.url)));
 assert.equal(menu['admin/services/cowplay/tesla'].title,undefined,'direct Tesla route must not add a second native LuCI tab row');
 assert.equal(menu['admin/services/cowplay/tesla'].action.path,'cowplay/tesla');
-const service=await startFixture(),luci=await startLuciFixture(process.env.LUCI_RUNTIME_DIR,service.origin),b=await start(),checks=[],shots=[];
+const service=await startFixture(),luci=await startLuciFixture(process.env.LUCI_RUNTIME_DIR,service.origin,{darkMode:process.env.LUCI_TEST_DARK==='1'}),b=await start(),checks=[],shots=[];
 const route='/cgi-bin/luci/admin/services/cowplay';
 const labels=()=>b.evaluate("[...document.querySelectorAll('.cw-tabs a')].map(a=>a.textContent)");
 const settle=()=>b.evaluate("Promise.all(document.getAnimations().filter(a=>a.effect.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})))");
@@ -38,17 +38,18 @@ try {
  }
  for(const [w,h] of [[1280,720],[800,480]]) {
   await b.viewport(w,h);await b.goto(service.origin+'/car?held-tesla='+w+'#settings/pic');
-  await b.wait(()=>b.evaluate("!!document.querySelector('#settings-tesla')"),'car Tesla entry');
-  const point=await b.evaluate("(()=>{const a=window.__heldTesla=document.querySelector('#settings-tesla');a.scrollIntoView({block:'nearest'});const r=a.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()");
+  await b.wait(()=>b.evaluate("!!document.querySelector('#settings-tab-tesla')"),'car Tesla entry');
+  const point=await b.evaluate("(()=>{const a=window.__heldTesla=document.querySelector('#settings-tab-tesla');a.scrollIntoView({block:'nearest'});const r=a.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()");
   const reads=(await service.fixture({})).stateReads;
   await b.call('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});
   await b.wait(async()=>(await service.fixture({})).stateReads>reads+1,'two state refreshes while link is held');
   await b.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))');
-  assert.equal(await b.evaluate("window.__heldTesla.isConnected&&window.__heldTesla===document.querySelector('#settings-tesla')"),true,'polling preserves the pressed link');
+  assert.equal(await b.evaluate("window.__heldTesla.isConnected&&window.__heldTesla===document.querySelector('#settings-tab-tesla')"),true,'polling preserves the pressed link');
   await b.call('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});
-  await b.wait(()=>b.evaluate("location.pathname.endsWith('/cowplay/tesla')&&!!document.querySelector('#tesla-vin')"),'native release opens Tesla in the same window');
+  await b.wait(()=>b.evaluate("location.pathname==='/car'&&location.hash==='#settings/tesla'&&!!document.querySelector('#tesla-unlock')"),'native release opens Tesla in the same window');
   checks.push(w+'px: press -> two polls -> release really opens Tesla management');
  }
+ await b.goto(luci.origin+'/cgi-bin/luci/admin/services/cowplay/tesla');await b.wait(()=>b.evaluate("!!document.querySelector('#tesla-vin')"),'LuCI Tesla status check');
  await fetch(luci.origin+'/__fixture',{method:'POST',body:JSON.stringify({rpcErrors:{status:7}})});
  await b.evaluate("document.querySelector('#tesla-refresh').click()");
  await b.wait(()=>b.evaluate("document.querySelector('.cw-pill').textContent==='服务状态未知'"),'rejected status RPC stays unknown');

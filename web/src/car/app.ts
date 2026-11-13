@@ -2,7 +2,7 @@
 import {targetPhone, type Diagnosis, type Phone, type Segments, type State, type Stats} from '../shared/api';
 
 export type View = 'connect' | 'session' | 'settings';
-export type Tab = 'pic' | 'audio' | 'display' | 'phones' | 'devices' | 'diag' | 'about';
+export type Tab = 'pic' | 'audio' | 'display' | 'phones' | 'tesla' | 'devices' | 'diag' | 'about';
 /** window: waiting for a new iPhone · pair: compare digits · finishing: bond being saved. */
 export type Scene = 'token' | 'onboard' | 'window' | 'pair' | 'finishing' | 'connecting' | 'choose' | 'takeover' | 'notfound' | 'stopped';
 
@@ -22,7 +22,6 @@ export const app = {
   /** The viewer channel is up (hello received). */
   channel: false,
   channelError: null as string | null,
-  buildMismatch: false,
   stateError: null as string | null,
   /** A frame was painted in the current connection. */
   rendered: false,

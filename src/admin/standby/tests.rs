@@ -142,7 +142,7 @@ impl Fixture {
             .unwrap();
         assert_eq!(response.status(), 101);
         let mut socket = response.upgrade().await.unwrap();
-        let hello = serde_json::json!({"build": f50_server::build_info::BUILD_ID, "protocol": f50_server::build_info::PROTOCOL}).to_string();
+        let hello = serde_json::json!({"takeover": false}).to_string();
         let mask = [1u8, 2, 3, 4];
         let mut frame = vec![0x81];
         if hello.len() < 126 {

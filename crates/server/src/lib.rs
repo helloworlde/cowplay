@@ -715,6 +715,7 @@ impl Hub {
 pub fn router(hub: Arc<Hub>) -> Router {
     Router::new()
         .route("/ws", get(ws_upgrade))
+        .route("/car/reset", get(reset_car_page))
         .merge(auth::router())
         .route(
             "/health",
@@ -722,6 +723,13 @@ pub fn router(hub: Arc<Hub>) -> Router {
         )
         .fallback(get(asset))
         .with_state(hub)
+}
+async fn reset_car_page() -> Response {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    let mut response = axum::response::Redirect::to(&format!("/car?cowplay_refresh={nonce}")).into_response();
+    response.headers_mut().insert("Clear-Site-Data", axum::http::HeaderValue::from_static("\"cache\""));
+    response.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+    response
 }
 async fn asset(State(hub): State<Arc<Hub>>, uri: axum::http::Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
@@ -815,10 +823,7 @@ async fn send(s: &mut WebSocket, m: Message) -> bool {
     )
 }
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Hello {
-    build: String,
-    protocol: u32,
     /// The user chose this screen (tapped connect): replace the current viewer instead of waiting.
     #[serde(default)]
     takeover: bool,
@@ -834,8 +839,7 @@ fn test_cookie(h: &Hub) -> String {
 }
 #[cfg(test)]
 fn handshake() -> String {
-    serde_json::json!({"build":build_info::BUILD_ID,"protocol":build_info::PROTOCOL})
-        .to_string()
+    serde_json::json!({"takeover":false}).to_string()
 }
 async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
     let auth = tokio::time::timeout(Duration::from_secs(5), socket.recv()).await;
@@ -843,9 +847,9 @@ async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
         Ok(Some(Ok(Message::Text(t)))) => serde_json::from_str::<Hello>(&t).ok(),
         _ => None,
     };
-    let Some(hello) = hello.filter(|h| h.protocol == build_info::PROTOCOL && h.build == build_info::BUILD_ID) else {
-        let mismatch = serde_json::json!({"type":"error","code":"CLIENT_BUILD_MISMATCH","message":"页面版本不匹配，请刷新网页。","build":build_info::BUILD_ID,"protocol":build_info::PROTOCOL});
-        let _ = send(&mut socket, Message::Text(mismatch.to_string().into())).await;
+    let Some(hello) = hello else {
+        let invalid = serde_json::json!({"type":"error","code":"INVALID_HELLO","message":"连接初始化数据无效。"});
+        let _ = send(&mut socket, Message::Text(invalid.to_string().into())).await;
         return;
     };
     if let Some(window) = hello.window {
@@ -875,7 +879,7 @@ async fn client(mut socket: WebSocket, h: Arc<Hub>, id: String) {
     let generation = generation.unwrap();
     let mut guard = ViewerGuard(h.clone(), None);
     diag::diag().event("ok", "web", "车机查看通道已连接");
-    if !send(&mut socket,Message::Text(serde_json::json!({"type":"hello","build":build_info::BUILD_ID,"protocol":build_info::PROTOCOL}).to_string().into())).await{return}
+    if !send(&mut socket,Message::Text(serde_json::json!({"type":"hello"}).to_string().into())).await{return}
     let mut epoch = h.session_epoch.load(Ordering::Acquire);
     h.queue.lock().unwrap().discontinuity();
     let _ = h.control.try_send(Control::Keyframe);
@@ -1394,6 +1398,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(page.status(), StatusCode::OK, "{path}");
+            assert_eq!(page.headers()[axum::http::header::CACHE_CONTROL], "no-store");
             assert!(page.headers()[axum::http::header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
             let body = axum::body::to_bytes(page.into_body(), 1 << 20).await.unwrap();
             assert!(String::from_utf8_lossy(&body).contains(title), "{path}");
@@ -1412,6 +1417,33 @@ mod tests {
     fn h_missing() -> Arc<Hub> {
         Hub::new("synthetic-token-for-tests-only".into(), "https://example.invalid".into()).0
     }
+    #[tokio::test]
+    async fn page_reset_only_clears_cache_and_redirects_to_a_fresh_car_page() {
+        let hub = h_missing();
+        let cookie = test_cookie(&hub);
+        let mut headers = HeaderMap::new();
+        headers.insert("Cookie", cookie.parse().unwrap());
+        let client = hub.clients.from_headers(&headers).unwrap().id;
+        let response = router(hub.clone()).oneshot(axum::http::Request::builder().uri("/car/reset").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers()["Clear-Site-Data"], "\"cache\"");
+        assert_eq!(response.headers()[axum::http::header::CACHE_CONTROL], "no-store");
+        assert!(!response.headers().contains_key(axum::http::header::SET_COOKIE));
+        let target = response.headers()[axum::http::header::LOCATION].to_str().unwrap();
+        assert!(target.strip_prefix("/car?cowplay_refresh=").unwrap().parse::<u128>().unwrap() > 0);
+        assert_eq!(hub.clients.from_headers(&headers).unwrap().id, client);
+    }
+    #[tokio::test]
+    async fn embedded_car_bundle_matches_websocket_build() {
+        let html = WEB.get_file("car.html").unwrap().contents_utf8().unwrap();
+        let scripts: Vec<_> = html.split('"').filter(|path| path.starts_with("/assets/") && path.ends_with(".js")).collect();
+        assert!(!scripts.is_empty());
+        assert!(scripts.iter().any(|path| WEB.get_file(path.trim_start_matches('/')).unwrap().contents_utf8().unwrap().contains(build_info::BUILD_ID)), "embedded car bundle must be rebuilt with the websocket BUILD_ID");
+        let page = router(h_missing()).oneshot(axum::http::Request::builder().uri("/car?cowplay_refresh=synthetic").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(page.headers()[axum::http::header::CACHE_CONTROL], "no-store");
+    }
+
     #[tokio::test]
     async fn bundled_icon_has_image_mime_and_hashed_assets_are_cacheable() {
         let assets=WEB.get_dir("assets").unwrap();
@@ -1469,6 +1501,26 @@ mod wire_tests {
         connect_async,
         tungstenite::{client::IntoClientRequest, Message as WsMessage},
     };
+    #[tokio::test]
+    async fn viewer_initializes_without_version_gate() {
+        let (hub, _commands) = Hub::new("123456".into(), "https://test.invalid".into());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let routes = router(hub.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap(); });
+        for hello in ["{}", r#"{"build":"unrelated-build","protocol":9999}"#] {
+            let mut request = format!("ws://{address}/ws").into_client_request().unwrap();
+            request.headers_mut().insert("Origin", "https://test.invalid".parse().unwrap());
+            request.headers_mut().insert("Cookie", test_cookie(&hub).parse().unwrap());
+            let (mut socket, _) = connect_async(request).await.unwrap();
+            socket.send(WsMessage::Text(hello.into())).await.unwrap();
+            let response: serde_json::Value = serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+            assert_eq!(response["type"], "hello");
+            socket.close(None).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async { while hub.viewer.load(Ordering::Acquire) { tokio::task::yield_now().await; } }).await.unwrap();
+        }
+        server.abort();
+    }
     #[tokio::test]
     async fn viewer_requires_pong_even_when_application_messages_continue() {
         for pong in [false, true] {
@@ -1703,7 +1755,7 @@ mod wire_tests {
         task.abort();
     }
     #[tokio::test]
-    async fn version_rejection_reset_and_stopped_reader_release() {
+    async fn malformed_hello_reset_and_stopped_reader_release() {
         let (h, _control) = Hub::new(
             "synthetic-token-for-tests-only".into(),
             "https://test.invalid".into(),
@@ -1719,21 +1771,11 @@ mod wire_tests {
             r.headers_mut().insert("Cookie", test_cookie(&h).parse().unwrap());
             r
         };
-        let (mut stale, _) = connect_async(request()).await.unwrap();
-        stale
-            .send(WsMessage::Text("not-a-hello".into()))
-            .await
-            .unwrap();
-        assert!(stale
-            .next()
-            .await
-            .unwrap()
-            .unwrap()
-            .to_text()
-            .unwrap()
-            .contains("CLIENT_BUILD_MISMATCH"));
+        let (mut invalid, _) = connect_async(request()).await.unwrap();
+        invalid.send(WsMessage::Text("not-a-hello".into())).await.unwrap();
+        assert!(invalid.next().await.unwrap().unwrap().to_text().unwrap().contains("INVALID_HELLO"));
         assert!(!h.viewer.load(Ordering::Acquire));
-        drop(stale);
+        drop(invalid);
         let (mut ws, _) = connect_async(request()).await.unwrap();
         ws.send(WsMessage::Text(
             handshake().into(),
@@ -1815,7 +1857,7 @@ mod wire_tests {
             r.headers_mut().insert("Origin", "https://test.invalid".parse().unwrap());
             r.headers_mut().insert("Cookie", cookie.parse().unwrap()); r
         };
-        let hello = serde_json::json!({"build":build_info::BUILD_ID,"protocol":build_info::PROTOCOL}).to_string();
+        let hello = handshake();
         let (mut old, _) = connect_async(request()).await.unwrap();
         old.send(WsMessage::Text(hello.clone().into())).await.unwrap();
         assert!(old.next().await.unwrap().unwrap().to_text().unwrap().contains("hello"));
@@ -1848,7 +1890,7 @@ mod wire_tests {
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
         let app=router(h.clone());let task=tokio::spawn(async move{axum::serve(listener,app).await.unwrap()});
         let request=||{let mut r=format!("ws://{addr}/ws").into_client_request().unwrap();r.headers_mut().insert("Origin",h.origin().parse().unwrap());r.headers_mut().insert("Cookie",format!("{}={}",clients::COOKIE,browser.id).parse().unwrap());r};
-        let hello=serde_json::json!({"build":build_info::BUILD_ID,"protocol":build_info::PROTOCOL}).to_string();
+        let hello=handshake();
         let (mut ws,_)=connect_async(request()).await.unwrap();ws.send(WsMessage::Text(hello.clone().into())).await.unwrap();assert!(ws.next().await.unwrap().unwrap().to_text().unwrap().contains("hello"));
         h.clients.set_token("234567").unwrap();
         tokio::time::timeout(Duration::from_secs(2),async{loop{let m=ws.next().await.unwrap().unwrap();if m.to_text().is_ok_and(|t|t.contains("AUTH_REVOKED")){break;}}}).await.expect("open viewer must lose access when a code is enabled");
@@ -1870,7 +1912,7 @@ mod wire_tests {
             request.headers_mut().insert("Cookie", test_cookie(&h).parse().unwrap());
             request
         };
-        let hello = |takeover: bool| serde_json::json!({"build":build_info::BUILD_ID,"protocol":build_info::PROTOCOL,"takeover":takeover}).to_string();
+        let hello = |takeover: bool| serde_json::json!({"takeover":takeover}).to_string();
         let (mut old, _) = connect_async(request()).await.unwrap();
         old.send(WsMessage::Text(hello(false).into())).await.unwrap();
         assert!(old.next().await.unwrap().unwrap().to_text().unwrap().contains("hello"));
@@ -1924,7 +1966,7 @@ mod wire_tests {
         .await
         .unwrap();
         let hello = ws.next().await.unwrap().unwrap();
-        assert!(hello.to_text().unwrap().contains(build_info::BUILD_ID));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(hello.to_text().unwrap()).unwrap()["type"], "hello");
         let status = ws.next().await.unwrap().unwrap();
         assert!(status.to_text().unwrap().contains("SYNTHETIC"));
         {

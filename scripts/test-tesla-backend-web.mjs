@@ -1,0 +1,111 @@
+// Real Rust HTTPS/API/state/persistence; vehicle confirmations use the isolated GATT fixture.
+import assert from 'node:assert/strict';
+import {start} from './lib/ui-browser.mjs';
+
+const [origin,caFile]=process.argv.slice(2),token='ab'.repeat(32),checks=[],shots=[];
+const request=async(method,args={},headers={Authorization:'Bearer '+token,Origin:origin})=>{
+ const r=await fetch(origin+'/api/manage/'+method,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(args)});
+ return {status:r.status,body:await r.json()};
+};
+const fixture=async(args={})=>fetch(origin+'/__tesla_fixture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)}).then(r=>r.json());
+for(const headers of [{Origin:origin},{Origin:origin,Authorization:'Bearer 123456'},{Origin:origin,Cookie:'sysauth=synthetic-luci-session'},{Origin:'https://other.example.test',Authorization:'Bearer '+token}]){
+ const r=await request('tesla_configure',{vin:'SYNTH000000000001',enabled:true},headers);assert.equal(r.status,headers.Origin===origin?401:403);
+}
+assert.equal((await request('tesla_configure',{vin:'SYNTH000000000001',enabled:false,ubus_rpc_session:'synthetic-session'})).status,409);
+assert.equal((await request('tesla_configure',{vin:'INVALID',enabled:false})).status,409);
+assert.equal((await request('tesla_status')).body.configured,false);
+checks.push('real HTTPS rejects missing/incorrect management tokens, LuCI cookie, six-digit token, wrong Origin, sid and invalid VIN without saving');
+const b=await start({caFile});
+const click=async selector=>{await b.wait(()=>b.evaluate(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`),'enabled '+selector);await b.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);};
+const input=async(selector,value)=>b.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+const decision=async accept=>{await b.wait(()=>b.evaluate("!!document.querySelector('.action-confirmation[open]')"),'explicit confirmation');await click(accept?'.confirmation-accept':'.confirmation-cancel');await b.wait(()=>b.evaluate("!document.querySelector('.action-confirmation[open]')"),'confirmation closed');};
+const action=async(selector,accept=true)=>{await click(selector);await decision(accept);};
+const phase=async text=>b.wait(()=>b.evaluate(`document.querySelector('#tesla-phase')?.textContent.includes(${JSON.stringify(text)})`),'phase '+text);
+const writes=()=>b.evaluate("apiCalls.filter(x=>x!=='tesla_status'&&x.startsWith('tesla_')).length");
+const login=async()=>{await input('input[aria-label="管理令牌"]',token);await b.evaluate("document.querySelector('#tesla-unlock').requestSubmit()");await b.wait(()=>b.evaluate("!!document.querySelector('#tesla-vin')&&!document.querySelector('#tesla-vin').disabled"),'real Tesla status');};
+try{
+ const version=await b.call('Browser.getVersion');assert.equal(version.product,'Chrome/136.0.7103.92');
+ await b.viewport(1254,784,1.53);
+ await b.call('Emulation.setUserAgentOverride',{userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.7103.92 Safari/537.36',platform:'Linux x86_64'});
+ await b.call('Page.addScriptToEvaluateOnNewDocument',{source:`window.apiCalls=[];window.helloSeen=0;window.pageInstance=Date.now()+Math.random();window.socketTrace=[];const originalFetch=window.fetch.bind(window);window.fetch=(url,...args)=>{if(typeof url==='string'&&url.startsWith('/api/manage/'))apiCalls.push(url.split('/').pop());return originalFetch(url,...args)};const OriginalSocket=window.WebSocket;window.WebSocket=class extends OriginalSocket{constructor(...args){super(...args);socketTrace.push({event:'construct',url:args[0]});this.addEventListener('open',()=>socketTrace.push({event:'open'}));this.addEventListener('close',e=>socketTrace.push({event:'close',code:e.code,reason:e.reason}));this.addEventListener('error',()=>socketTrace.push({event:'error'}));this.addEventListener('message',event=>{if(typeof event.data!=='string')return;try{const m=JSON.parse(event.data);socketTrace.push({event:'message',type:m.type,code:m.code});if(m.type==='hello')helloSeen++;}catch{}})}};`});
+ await b.goto(origin+'/car');
+ assert.equal(await b.evaluate('navigator.onLine'),false,'isolated container supplies a real offline hint while local HTTPS remains reachable');
+ await b.wait(()=>b.evaluate("!!document.querySelector('#keys button')"),'screen admission');
+ await b.evaluate("for(const n of '123456')[...document.querySelectorAll('#keys button')].find(x=>x.textContent===n).click()");
+ await b.wait(()=>b.evaluate('helloSeen>0'),'real trusted WSS handshake despite offline hint');
+ const beforeOffline=await b.evaluate('helloSeen');await b.evaluate("window.dispatchEvent(new Event('offline'))");await b.evaluate('new Promise(r=>setTimeout(r,250))');assert.equal(await b.evaluate('helloSeen'),beforeOffline);assert.equal(await b.evaluate("socketTrace.some(x=>x.event==='close')"),false,'offline hint does not tear down a working local channel');
+ const screenId=await b.evaluate("fetch('/api/state').then(r=>r.json()).then(s=>s.me.id)");assert.equal(typeof screenId,'string');
+ assert.equal(await b.evaluate("typeof VideoDecoder"),'function');await fixture({video:'green'});
+ const green=()=>b.evaluate("(()=>{const c=document.querySelector('#screen');if(c.width!==64||c.height!==64)return false;const p=c.getContext('2d').getImageData(32,32,1,1).data;return p[0]<80&&p[1]>100&&p[2]<110&&p[3]===255})()");
+ await b.wait(green,'native Chrome 136 WebCodecs decodes synthetic H.264 and paints a green canvas pixel');
+ await b.wait(()=>b.evaluate("document.body.dataset.view==='session'&&document.querySelector('#cover').hidden&&document.querySelector('#screen').clientWidth>0"),'native decoded frame is visible in the session');
+ shots.push(await b.shot('car-native-h264-synthetic-green-1254x784-dpr153'));await fixture({video:'stop'});
+ checks.push('synthetic 64x64 H.264 travels through real Rust WSS, native VideoDecoder and canvas paint; no audio or physical phone');
+ await b.goto(origin+'/__stale-car');await b.wait(()=>b.evaluate('helloSeen>0'),'cached page connects without a version gate');
+ for(const method of ['token','token_disable']){
+  assert.equal((await request(method,method==='token'?{action:'reset'}:{})).status,200);
+  const previous=await b.evaluate('pageInstance');await b.call('Page.reload');await b.wait(()=>b.evaluate("typeof pageInstance==='number'&&pageInstance!=="+JSON.stringify(previous)+"&&helloSeen>0"),'access-code change preserves admitted viewer');assert.equal(await b.evaluate("document.querySelector('#token-layer').hidden"),true);
+ }
+ const probe=()=>b.evaluate("fetch('/__cache-probe').then(r=>r.text())");
+ assert.equal(await probe(),'1');assert.equal((await fixture()).cache_requests,1);
+ await fixture({cache_generation:2});assert.equal(await probe(),'1','same URL really returns the old HTTP-cached resource before reset');assert.equal((await fixture()).cache_requests,1);
+ await b.evaluate("localStorage.setItem('synthetic-cache-test','kept');document.querySelector('#car-reset-page').click()");
+ await b.wait(()=>b.evaluate("location.pathname==='/car'&&new URL(location.href).searchParams.has('cowplay_refresh')&&helloSeen>0"),'top-level reset clears cache and opens the current page over real WSS');
+ assert.equal(await probe(),'2','Clear-Site-Data causes the same resource URL to be fetched again');assert.equal((await fixture()).cache_requests,2);
+ assert.equal(await b.evaluate("localStorage.getItem('synthetic-cache-test')"),'kept');await b.evaluate("localStorage.removeItem('synthetic-cache-test')");
+ assert.equal(await b.evaluate("document.querySelector('#token-layer').hidden"),true);
+ assert.equal(await b.evaluate("fetch('/api/state').then(r=>r.json()).then(s=>s.me.id)"),screenId,'page reset preserves the same admitted screen');
+ shots.push(await b.shot('car-real-wss-cache-recovered-1254x784-dpr153'));
+ await b.goto(origin+'/car#settings/pic');await b.wait(()=>b.evaluate("!!document.querySelector('#settings-tab-tesla')"),'native Tesla entry');
+ assert.equal(await b.evaluate("document.querySelector('#settings-tab-tesla').tagName"),'BUTTON');
+ await click('#settings-tab-tesla');await b.wait(()=>b.evaluate("!!document.querySelector('#tesla-unlock')"),'screen cookie cannot bypass inline management unlock');
+ assert.equal(await b.evaluate('location.pathname'),'/car');
+ checks.push('real HTTP cache reset preserves authorization; Tesla is a native CarPlay settings tab beside picture and microphone');
+ await login();await click('#tesla-add');await b.wait(()=>b.evaluate("document.querySelector('#tesla-settings').dataset.panel==='pair'"),'native pairing panel');
+ assert.equal(await b.evaluate("document.querySelector('#settings-tab-tesla').getAttribute('aria-current')"),'page');
+ assert.equal(await b.evaluate("document.querySelector('.s-pane h1').textContent"),'Tesla 车辆');
+ const measuredViewport=await b.evaluate('({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,secure:isSecureContext})');
+ assert.deepEqual(measuredViewport,{width:1254,height:784,dpr:Math.fround(1.53),secure:true});
+ assert.equal(await b.evaluate("!!document.querySelector('vite-error-overlay')"),false);
+ assert.equal(await b.evaluate("document.querySelector('#tesla-enabled').checked"),true);await click('#tesla-enabled');
+ await input('#tesla-vin','INVALID');const invalid=await writes();await click('#tesla-save');await b.wait(()=>b.evaluate("document.querySelector('#tesla-feedback').textContent.includes('17 位 VIN')"),'client validation');assert.equal(await writes(),invalid);
+ await input('#tesla-vin','synth000000000001');const cancelled=await writes();await action('#tesla-save',false);assert.equal(await writes(),cancelled);assert.equal((await request('tesla_status')).body.configured,false);
+ await action('#tesla-save');await b.wait(async()=>(await request('tesla_status')).body.configured,'Rust saved VIN');
+ assert.equal((await fixture()).starts,0,'disabled configuration does not open GATT');
+ assert.match(await b.evaluate("document.querySelector('#tesla-feedback').textContent"),/未启用/);
+ const fingerprint=(await request('tesla_status')).body.public_key_fingerprint;
+ await b.call('Page.reload');await b.wait(()=>b.evaluate("!!document.querySelector('input[aria-label=\"管理令牌\"]')"),'login after full reload');await login();assert.match(await b.evaluate("document.querySelector('#tesla-saved-vin').textContent"),/SYN.*0001/);
+ await click('#tesla-enabled');await action('#tesla-save');await phase('尚未授权');
+ assert.equal((await request('tesla_status')).body.public_key_fingerprint,fingerprint);
+ checks.push('VIN is normalized and persisted by Rust, survives browser reload, and explicit enable reuses the existing private identity');
+ await action('#tesla-pair');await phase('等待车内');await b.wait(async()=>(await fixture()).enrollments>=1,'actual enrollment bytes sent over fake GATT');
+ const beforeCancel=await writes();await action('#tesla-cancel',false);assert.equal(await writes(),beforeCancel);assert.equal((await request('tesla_status')).body.pairing,'pairing');
+ await action('#tesla-cancel');await phase('已取消');assert.equal((await fixture()).active,0);
+ await action('#tesla-pair');await b.wait(async()=>(await fixture()).enrollments>=2,'retry opened new GATT');await fixture({outcome:2});await phase('配对失败');
+ assert.equal((await request('tesla_status')).body.public_key_fingerprint,fingerprint);
+ await action('#tesla-pair');await b.wait(async()=>(await fixture()).enrollments>=3,'timeout pairing started');
+ const pending=(await request('tesla_status')).body;assert.ok(pending.pairing_deadline_ms>Date.now()&&pending.pairing_deadline_ms-Date.now()<=90000);
+ await b.wait(()=>b.evaluate("document.querySelector('#tesla-phase')?.textContent.includes('配对超时')"),'real 90-second pairing deadline',95000);
+ assert.equal((await fixture()).active,0);assert.equal((await request('tesla_status')).body.public_key_fingerprint,fingerprint);
+ await action('#tesla-pair');await b.wait(async()=>(await fixture()).enrollments>=4,'success pairing started');await fixture({outcome:1});await phase('车辆已确认配对');
+ await click('#tesla-panel-vehicle');await action('#tesla-connect');await phase('正在读取车辆数据');await b.wait(()=>b.evaluate("document.querySelector('#tesla-reading-0').textContent==='68 %'"),'real feed reading rendered');
+ assert.equal((await fixture()).active,1,'only one live GATT owner');
+ checks.push('real manager handles zero-write cancellation, GATT cancellation/cleanup, failed authorization, real 90-second timeout, retry, success and connection');
+ await click('#tesla-panel-controls');await action('#tesla-climate-pair');await b.wait(async()=>(await fixture()).enrollments>=5,'separate Driver enrollment bytes');await fixture({outcome:1});
+ await b.wait(()=>b.evaluate("!document.querySelector('#tesla-climate-query').disabled"),'Driver identity ready');await click('#tesla-climate-query');
+ await b.wait(()=>b.evaluate("document.querySelector('#tesla-climate-values').textContent.includes('21.0')"),'real climate result rendered');
+ const beforePower=await writes();await action('#tesla-climate-on',false);assert.equal(await writes(),beforePower);
+ await action('#tesla-climate-on');await b.wait(async()=>(await request('tesla_status')).body.climate.last_command_status==='confirmed','single climate command confirmed by synthetic worker');
+ assert.equal(await writes(),beforePower+1);assert.equal(await b.evaluate("document.querySelector('#tesla-ultra-allow').disabled"),true,'no CarPlay session cannot grant native control');
+ checks.push('Driver authorization, fresh query, explicit single command and native-control guard use the real Rust lifecycle');
+ assert.equal(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'),true);shots.push(await b.shot('tesla-real-backend-1254x784-dpr153'));
+ await click('#settings-tab-audio');await b.wait(()=>b.evaluate("!document.querySelector('#tesla-management')&&document.querySelector('.s-pane h1').textContent==='声音与通话'"),'native microphone page');
+ const reads=await b.evaluate("apiCalls.filter(x=>x==='tesla_status').length");await new Promise(r=>setTimeout(r,2200));assert.equal(await b.evaluate("apiCalls.filter(x=>x==='tesla_status').length"),reads,'leaving Tesla stops page polling');
+ assert.equal((await fixture()).active,1,'settings navigation preserves the vehicle connection');
+ await click('#settings-tab-tesla');await b.wait(()=>b.evaluate("!!document.querySelector('#tesla-vin')&&!document.querySelector('#tesla-unlock')"),'return keeps in-memory management unlock');await click('#tesla-panel-vehicle');await action('#tesla-disconnect');await phase('已断开');assert.equal((await fixture()).active,0);
+ await click('#tesla-lock');await b.wait(()=>b.evaluate("!!document.querySelector('#tesla-unlock')"),'explicit management lock');assert.equal(await b.evaluate('localStorage.length+sessionStorage.length'),0);
+ assert.equal(await b.evaluate('location.pathname'),'/car');
+ assert.deepEqual(b.errors,[]);assert.deepEqual(b.warnings,[]);
+ console.log(JSON.stringify({checks,shots,browser:version,viewport:measuredViewport,requestedDpr:1.53,transport:await fixture(),scope:'real HTTPS, Rust API/state/filesystem and fake GATT; synthetic vehicle outcomes, no physical Tesla or phone'},null,2));
+}catch(error){console.log(JSON.stringify({error:String(error),shot:await b.shot('tesla-backend-failure'),errors:b.errors,dom:await b.evaluate("({title:document.title,hello:window.helloSeen,sockets:window.socketTrace,body:document.body.textContent.slice(0,700),phase:document.querySelector('#tesla-phase')?.textContent,feedback:document.querySelector('#tesla-feedback')?.textContent})")}));throw error;}
+finally{await b.close();}

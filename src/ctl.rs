@@ -32,7 +32,10 @@ fn arg<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
 }
 
 async fn call(State(a): State<Arc<Admin>>, UrlPath(method): UrlPath<String>, body: Bytes) -> Response {
-    let args: Value = if body.is_empty() { json!({}) } else { serde_json::from_slice(&body).unwrap_or(json!({})) };
+    let mut args: Value = if body.is_empty() { json!({}) } else { serde_json::from_slice(&body).unwrap_or(json!({})) };
+    if let Some(args) = args.as_object_mut() {
+        args.remove("ubus_rpc_session");
+    }
     match dispatch(&a, &method, &args).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => err(e),
@@ -450,6 +453,51 @@ mod tests {
         let mut ambiguous = wifi.clone();
         ambiguous.sections.push(wifi.section("car").unwrap().clone());
         assert!(super::network_info(&ambiguous, &lan, "car", "").is_err());
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "tesla")]
+    async fn luci_tesla_accepts_rpc_session_metadata_and_preserves_strict_arguments() {
+        let (manager, _server, hub, dir) = crate::bluetooth::recovery_tests::admin_fixture().await;
+        let a = crate::admin::Admin::new(manager, hub, "https://test.invalid".into(), dir.path().join("cowplay.uci"), dir.path().join("config"), dir.path().to_owned(), "cert".into(), "key".into(), "127.0.0.1:18443".parse().unwrap(), "127.0.0.1:7000".parse().unwrap(), None, (800, 480)).unwrap();
+        let args = serde_json::json!({"vin":"SYNTH000000000001", "enabled":false, "ubus_rpc_session":"synthetic-session"});
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(a.tesla.clone().run("unix:path=/nonexistent-cowplay-test-bus".into(), 0, stopped));
+        let response = super::call(axum::extract::State(a.clone()), axum::extract::Path("tesla_configure".into()), args.to_string().into()).await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, axum::http::StatusCode::OK, "{saved}");
+        assert_eq!(saved["configured"], true);
+        assert_eq!(saved["key_ready"], true);
+        let fingerprint = saved["public_key_fingerprint"].clone();
+        let response = super::call(axum::extract::State(a.clone()), axum::extract::Path("tesla_configure".into()), serde_json::json!({"vin":null,"enabled":false,"ubus_rpc_session":"synthetic-session"}).to_string().into()).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let response = super::call(axum::extract::State(a.clone()), axum::extract::Path("tesla_disconnect".into()), serde_json::json!({"ubus_rpc_session":"synthetic-session"}).to_string().into()).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let response = super::call(axum::extract::State(a.clone()), axum::extract::Path("tesla_configure".into()), serde_json::json!({"enabled":false,"unexpected":true,"ubus_rpc_session":"synthetic-session"}).to_string().into()).await;
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+        assert!(super::dispatch(&a, "tesla_configure", &args).await.is_err(), "remote management keeps strict arguments");
+        let current = super::dispatch(&a, "tesla_status", &serde_json::json!({})).await.unwrap();
+        assert_eq!(current["public_key_fingerprint"], fingerprint);
+        let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.path().join("tesla/config.json")).unwrap()).unwrap();
+        assert_eq!(persisted["vin"], args["vin"]);
+        assert!(persisted.get("ubus_rpc_session").is_none());
+        let socket = dir.path().join("audit.sock");
+        let server_admin = a.clone(); let server_socket = socket.clone();
+        let server = tokio::spawn(async move { super::serve(server_admin, &server_socket).await.unwrap(); });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async { while !socket.exists() { tokio::task::yield_now().await; } }).await.unwrap();
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for method in ["status", "phones", "screens", "logs", "token", "config_export"] {
+            let body = serde_json::json!({"ubus_rpc_session":"synthetic-session"}).to_string();
+            let mut connection = tokio::net::UnixStream::connect(&socket).await.unwrap();
+            connection.write_all(format!("POST /ctl/{method} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            let mut response = String::new();connection.read_to_string(&mut response).await.unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"), "{method}: {response}");
+        }
+        server.abort();
+        stop.send(true).unwrap();
+        task.await.unwrap();
     }
 
     #[tokio::test]

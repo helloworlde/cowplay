@@ -4,7 +4,7 @@
 
 ## 版本与检查更新
 
-`packaging/VERSION` 是双 APK 与 Linux 归档的版本源，与 Cargo 版本保持一致；修订号为 0 时标签省略 `-r0`，非零修订使用 `vX.Y.Z-rN`。前后端 BUILD_ID 与 PROTOCOL 必须一致。
+`packaging/VERSION` 是双 APK 与 Linux 归档的版本源，与 Cargo 版本保持一致；修订号为 0 时标签省略 `-r0`，非零修订使用 `vX.Y.Z-rN`。构建时核对前后端 BUILD_ID 与 PROTOCOL 元数据一致；网页接入不按这些值拦截。
 
 在 LuCI“服务 → CowPlay → 系统 → GitHub 安装与升级”选择“正式版”或“开发版（Pre-release）”。正式渠道只接受正式版，开发渠道只接受预发布；指定标签也必须属于所选渠道。切换渠道后重新检查，确认安装时显示候选渠道。检查不会安装，安装需确认。
 

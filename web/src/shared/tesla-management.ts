@@ -44,7 +44,7 @@ type StepChip = '' | '下一步' | '进行中' | '已连接' | '已授权';
 /** Only claims what the status proves; finished steps stay unmarked rather than guessed. */
 export function teslaSteps(s: TeslaStatus): StepChip[] {
   const needsPairing = ['not_authorized', 'authorization_failed', 'pairing_failed', 'pairing_timeout', 'pairing_cancelled'].includes(s.phase);
-  const setup: StepChip = !s.configured || !s.key_ready ? '下一步' : '';
+  const setup: StepChip = !s.configured || !s.key_ready || !s.enabled ? '下一步' : '';
   const pair: StepChip = setup ? '' : s.pairing === 'pairing' ? '进行中' : needsPairing ? '下一步' : '';
   const link: StepChip = setup || pair ? '' : s.vehicle?.connected && s.phase === 'reading' ? '已连接' : s.enabled ? '下一步' : '';
   return [setup, pair, link, s.climate?.authorized ? '已授权' : '', s.ultra?.climate_control?.allowed ? '已授权' : ''];
@@ -57,7 +57,7 @@ export function freshnessSummary(connected: boolean, reasons: string[]): string 
   return '电量与续航为 30 秒内采样，胎压为 2 分钟内采样。';
 }
 
-export function teslaManagement(call: Call): {element: HTMLElement; start: () => void; dispose: () => void} {
+export function teslaManagement(call: Call, onStatus?: (state: TeslaStatus) => void): {element: HTMLElement; start: () => void; dispose: () => void} {
   let state: TeslaStatus | null = null, disposed = false, pending = false, mutating = false, epoch = 0, readEpoch = 0, timer = 0, dirty = false;
   const vin = h('input', {id: 'tesla-vin', type: 'text', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', maxlength: 17, placeholder: '输入完整的 17 位 VIN', 'aria-label': 'Tesla VIN'});
   const enabled = h('input', {id: 'tesla-enabled', type: 'checkbox', 'aria-label': '启用 Tesla 连接'});
@@ -136,10 +136,10 @@ export function teslaManagement(call: Call): {element: HTMLElement; start: () =>
       const [result] = await Promise.all([call('tesla_status'), call('status').catch((): Record<string, any> => ({}))]);
       if (disposed || current !== epoch || read !== readEpoch) return;
       if (typeof result.configured !== 'boolean' || !result.vehicle) throw Error('Tesla 状态不完整，请核对核心版本。');
-      state = result as TeslaStatus; render();
+      state = result as TeslaStatus; onStatus?.(state); render();
 
     } catch (error) {
-      if (!disposed && current === epoch && read === readEpoch) { status.textContent = '无法读取 Tesla 当前状态'; feedback.textContent = error instanceof Error ? error.message : '状态请求失败'; }
+      if (!disposed && current === epoch && read === readEpoch) { status.textContent = '无法读取 Tesla 当前状态'; feedback.dataset.kind = 'error'; feedback.textContent = error instanceof Error ? error.message : '状态请求失败'; }
     }
   }
   function action(id: string, label: string, method: string, prompt: {title: string; description: string; confirm: string} | null, available: () => boolean, args: () => unknown = () => ({})): HTMLButtonElement {
@@ -156,16 +156,17 @@ export function teslaManagement(call: Call): {element: HTMLElement; start: () =>
         if (prompt && !await confirmAction({...prompt, changes, current}) || !current()) return;
         const request = ++epoch;
         mutating = true;
-        feedback.textContent = '正在发送请求…';
+        feedback.dataset.kind = 'pending'; feedback.textContent = '正在发送请求…';
         const result = await call(method, values);
         if (disposed || request !== epoch) return;
         if (typeof result.configured !== 'boolean' || !result.vehicle) throw Error('未收到完整操作状态，请刷新核对后再重试。');
-        state = result as TeslaStatus;
+        state = result as TeslaStatus; onStatus?.(state);
         if (method === 'tesla_configure') { vin.value = ''; dirty = false; }
-        feedback.textContent = method === 'tesla_configure' ? '配置已保存。本机密钥由主机生成或复用；授权和连接结果见实时状态。' : method === 'tesla_climate_command' ? '已返回单次命令结果，请查看车辆确认状态；页面不会推测车辆温度。' : '请求已返回，结果以车辆实时状态为准。';
+        feedback.dataset.kind = method === 'tesla_configure' ? 'saved' : method === 'tesla_climate_command' ? 'command' : 'status';
+        feedback.textContent = method === 'tesla_configure' ? result.enabled ? '配置已保存。请开始车内配对；已有授权可直接连接车辆。' : 'VIN 与本机密钥已保存，连接未启用。请勾选“启用 Tesla 连接”并保存，再开始车内配对。' : method === 'tesla_climate_command' ? '已返回单次命令结果，请查看车辆确认状态；页面不会推测车辆温度。' : '请求已返回，结果以车辆实时状态为准。';
         render();
       } catch (error) {
-        if (!disposed) feedback.textContent = `操作结果未确认：${error instanceof Error ? error.message : '请求失败'}。请核对实时状态后重试。`;
+        if (!disposed) { feedback.dataset.kind = 'error'; feedback.textContent = `操作结果未确认：${error instanceof Error ? error.message : '请求失败'}。请核对实时状态后重试。`; }
       } finally { mutating = false; if (!disposed) { pending = false; sync(); } }
     };
     return button;
@@ -200,13 +201,13 @@ export function teslaManagement(call: Call): {element: HTMLElement; start: () =>
   const element = h('section', {id: 'tesla-management', class: 'tesla-management', 'aria-labelledby': 'tesla-title'},
     h('div', {class: 'tesla-head'}, h('h2', {id: 'tesla-title'}, 'Tesla 车辆'), reload), h('p', {class: 'lead'}, '按步骤完成配置、车内配对和连接。离开此页后车辆连接保留。'), status, feedback,
     step(1, '车辆', row('已保存的车辆', savedVin),
-      h('form', {id: 'tesla-config-form'}, field('车辆 VIN', vin), h('p', {class: 'lead'}, '已有 VIN 不会回填。首次或更换车辆时输入完整 VIN；留空会保留已保存车辆。'), field('启用 Tesla 连接', enabled), save)),
+      h('form', {id: 'tesla-config-form'}, field('车辆 VIN', vin), h('p', {class: 'lead'}, '已有 VIN 不会回填。首次或更换车辆时输入完整 VIN；留空会保留已保存车辆。'), field('启用 Tesla 连接', enabled), h('p', {class: 'lead'}, '车内配对前须勾选启用并保存；未启用时只保存车辆与本机密钥。'), save)),
     step(2, '车内配对', h('p', {class: 'lead'}, '车辆停稳后开始，在车内屏幕确认本机公钥。只申请读取车辆数据的权限；失败不会清除已有授权。'), countdown, h('div', {class: 'tesla-actions'}, pair, cancel)),
     step(3, '连接与读数', h('div', {class: 'tesla-actions'}, connect, disconnect), h('p', {id: 'tesla-freshness', class: 'tesla-freshness', role: 'status'}), h('dl', {class: 'tesla-readings'}, ...readings)),
     step(4, '空调控制（可选）', climateStatus, climateValues, climateAge, h('div', {class: 'tesla-actions'}, climateQuery, climatePair),
       h('p', {class: 'lead'}, '升级授权需在车内确认，车辆授予的权限范围大于空调；页面只发送空调开关与双区温度，每条命令只发一次。'),
       h('div', {class: 'tesla-actions'}, climateOn, climateOff), climateRange, field('驾驶位目标温度（°C）', driver), field('副驾目标温度（°C）', passenger), setTemperature),
-    step(5, 'CarPlay 原生空调（实验）', ultra, h('div', {class: 'tesla-actions'}, nativeGrant, nativeRevoke), h('p', {class: 'lead'}, '需先完成第 4 步并读取空调状态，再允许当前 CarPlay 会话控制。换手机、重连或停服后需重新允许；真实车辆效果需现场验收。')),
+    step(5, 'CarPlay 原生空调（实验）', ultra, h('div', {class: 'tesla-actions'}, nativeGrant, nativeRevoke), h('p', {class: 'lead'}, '需先完成空调控制授权并读取状态，再允许当前 CarPlay 会话控制。换手机、重连或停服后需重新允许；真实车辆效果需现场验收。')),
     h('details', {class: 'tesla-details'}, h('summary', {}, '技术详情'), row('只读身份密钥', key), row('只读公钥指纹', fingerprint), row('只读车辆授权', permission), row('独立控制身份', driverKey), row('控制公钥指纹', driverFingerprint)));
   const freshness = element.querySelector<HTMLElement>('#tesla-freshness')!;
   element.querySelector('form')!.onsubmit = event => { event.preventDefault(); save.click(); };

@@ -248,20 +248,17 @@ export function renderConnect(a: ConnectActions): void {
         : ['正在连接', name, '保持 iPhone 的蓝牙和 Wi‑Fi 打开，通常 10 秒内出现画面。', '连上后自动进入 CarPlay'];
       if (e) eb.className = 'eyebrow orange';
       body.push(stepList());
-      body.push(actions(e ? btn(app.buildMismatch ? '刷新页面' : '重新连接', 'blue', () => a.retry()) : null, btn('换一台 iPhone', '', () => a.openChoose())));
+      body.push(actions(e ? btn('重新连接', 'blue', () => a.retry()) : null, btn('换一台 iPhone', '', () => a.openChoose())));
     }
-  }
-  if (app.buildMismatch) {
-    t = ['页面已更新', '刷新 CowPlay', '页面与接收端版本不一致，授权仍保留。', '刷新后继续使用'];
-    body.splice(0, body.length, btn('刷新页面', 'blue', () => a.retry()));
   }
   eb.textContent = t[0];
   $('c-title').textContent = t[1];
   $('c-lead').textContent = t[2];
   $('c-foot').textContent = t[3];
-  renderManagementEntry($('c-admin'), s?.network.luci ?? null, s?.network.platform);
+  renderManagementEntry($('c-admin'), s?.network.management ?? s?.network.luci ?? null, s?.network.platform);
   if (app.authorized && app.stateError) body.push(h('p',{class:'error',role:'alert'},app.stateError));
   if (app.authorized && s) body.push(debug.update(s,app.channel));
+  body.push(h('a', {id: 'car-reset-page', href: '/car/reset', class: 'btn'}, '清理页面缓存并重新打开'));
   clear($('c-body'), ...body);
   $('token-layer').hidden = sc !== 'token';
   $('token-title').textContent = app.accessOpen ? '进入 CowPlay' : app.setupRequired ? (firstCode ? '确认访问码' : '首次设置访问码') : '输入访问码';

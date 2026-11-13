@@ -1,5 +1,6 @@
 import {h} from '../shared/dom';
-import {confirmAction} from '../shared/confirmation';
+import {managementCall} from '../shared/api';
+import {confirmAction, cancelConfirmation} from '../shared/confirmation';
 import {teslaManagement} from '../shared/tesla-management';
 import '../phone/phone.css';
 import './manage.css';
@@ -7,12 +8,10 @@ import './manage.css';
 const root = document.getElementById('content')!;
 let secret = '';
 let tesla: ReturnType<typeof teslaManagement> | null = null;
+let showPage: (() => void) | null = null;
 const feedback = h('p', {role: 'status', class: 'lead', id: 'feedback'});
 async function api(method: string, args: unknown = {}): Promise<Record<string, any>> {
-  const r = await fetch(`/api/manage/${method}`, {method: 'POST', cache: 'no-store', credentials: 'omit', headers: {'Content-Type': 'application/json', Authorization: `Bearer ${secret}`}, body: JSON.stringify(args)});
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw Error(body.error ?? (r.status === 404 ? '管理入口尚未启用，请在主机上配置管理令牌文件后重启 CowPlay。' : `请求失败 (${r.status})`));
-  return body;
+  return managementCall(method,args,secret);
 }
 type Role = 'primary' | 'secondary' | 'destructive';
 /** At most one primary action per card; everything else is secondary or destructive. */
@@ -27,6 +26,9 @@ function action(label: string, run: () => Promise<void>, role: Role = 'secondary
 }
 const field = (label: string, input: HTMLElement) => h('label', {class: 'manage-field'}, h('span', {}, label), input);
 function login(): void {
+  cancelConfirmation();
+  showPage = null;
+  document.title = 'CowPlay 管理';
   tesla?.dispose(); tesla = null;
   secret = '';
   const token = h('input', {type: 'password', autocomplete: 'off', required: true, minlength: 64, maxlength: 64, 'aria-label': '管理令牌'});
@@ -75,22 +77,30 @@ async function dashboard(): Promise<void> {
   }, 'primary');
   const logout = h('button', {type: 'button', class: 'link-button'}, '退出管理');
   logout.onclick = () => login();
-  tesla?.dispose(); tesla = teslaManagement(api);
-  tesla.element.classList.add('manage-wide');
   document.body.classList.add('manage-dashboard');
-  // Order follows frequency of use: status, access, picture limits, certificate, then the optional vehicle.
-  root.replaceChildren(h('header', {class: 'manage-head'}, h('div', {}, h('h1', {}, 'CowPlay 管理'), h('p', {class: 'lead'}, `${status.version ?? '—'} · ${status.build ?? '—'}`)),
-    h('nav', {class: 'manage-links'}, h('a', {href: '/car'}, '车机投屏'), h('a', {href: '/phone'}, '手机控制台'), h('a', {href: '#tesla-management'}, 'Tesla 车辆'), logout)), feedback,
-    h('div', {class: 'manage-grid'},
+  const title = h('h1', {}, 'CowPlay 管理');
+  const header = h('header', {class: 'manage-head'}, h('div', {}, title, h('p', {class: 'lead'}, `${status.version ?? '—'} · ${status.build ?? '—'}`)),
+    h('nav', {class: 'manage-links'}, h('a', {href: '#overview'}, '接收端管理'), h('a', {href: '/car#settings/tesla'}, 'Tesla 车辆'), h('a', {href: '/car'}, '车机投屏'), h('a', {href: '/phone'}, '手机控制台'), logout));
+  const general = h('div', {class: 'manage-grid'},
       h('section', {}, h('h2', {}, '连接状态'), h('p', {}, status.verdict?.title ?? status.verdict ?? '状态未知'), h('p', {class: 'lead'}, `访问地址：${status.network?.origin ?? '—'}`)),
       h('section', {}, h('h2', {}, '投屏访问'), h('p', {class: 'lead'}, '访问码可选。开启后，新浏览器及免码进入的浏览器需验证一次；不设置时，能打开此地址的设备可直接进入。'),
         h('div', {class: 'manage-field'}, h('span', {}, '当前访问码'), h('span', {class: 'manage-inline'}, tokenValue, showToken)),
         field('新访问码', accessCode), changeCode, h('div', {class: 'manage-danger'}, resetCode, disableCode)),
       h('section', {}, h('h2', {}, '画面上限'), field('分辨率上限', resolution), customField, field('帧率上限', fps), field('自动降低帧率', downgrade), save),
-      h('section', {}, h('h2', {}, 'HTTPS 证书'), h('p', {class: 'lead'}, status.network?.cert_days == null ? '有效期未知' : `证书剩余 ${status.network.cert_days} 天`), field('证书链 PEM', certificate), field('私钥 PEM', key), upload),
-      tesla.element),
-    h('p', {class: 'lead'}, '热点、路由、开机启动和升级由主机系统管理。手机控制台提供配对、重连、屏幕偏好与诊断日志。'));
-  tesla.start();
+      h('section', {}, h('h2', {}, 'HTTPS 证书'), h('p', {class: 'lead'}, status.network?.cert_days == null ? '有效期未知' : `证书剩余 ${status.network.cert_days} 天`), field('证书链 PEM', certificate), field('私钥 PEM', key), upload));
+  showPage = () => {
+    cancelConfirmation();
+    tesla?.dispose(); tesla = null;
+    const vehicle = ['#tesla', '#tesla-management'].includes(location.hash);
+    title.textContent = vehicle ? 'Tesla 车辆管理' : 'CowPlay 管理';
+    document.title = vehicle ? 'CowPlay · Tesla 车辆管理' : 'CowPlay 管理';
+    if (vehicle) tesla = teslaManagement(api);
+    root.replaceChildren(header, feedback, tesla?.element ?? general,
+      h('p', {class: 'lead'}, '热点、路由、开机启动和升级由主机系统管理。手机控制台提供配对、重连、屏幕偏好与诊断日志。'));
+    tesla?.start();
+  };
+  showPage();
 }
-window.addEventListener('pagehide', () => { tesla?.dispose(); });
+window.addEventListener('hashchange', () => showPage?.());
+window.addEventListener('pagehide', () => { cancelConfirmation(); tesla?.dispose(); });
 login();

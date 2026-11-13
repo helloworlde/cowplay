@@ -42,6 +42,12 @@ try {
   await value('管理令牌',token);await b.evaluate("document.querySelector('form').requestSubmit()");
   await b.wait(()=>b.evaluate("document.body.textContent.includes('画面上限')"),'management content');
   checks.push('page identity, failed login, cleared password, management status and no blank page');
+  const beforeRoute=calls.filter(c=>c.method==='token'&&c.args.action==='reset').length;
+  await click('重置访问码');await b.wait(()=>b.evaluate("!!document.querySelector('dialog[open]')"),'reset confirmation before routing');
+  await b.evaluate("location.hash='tesla'");await b.wait(()=>b.evaluate("!document.querySelector('dialog')&&document.querySelector('h1').textContent==='Tesla 车辆管理'"),'route cancels and removes old confirmation');
+  assert.equal(calls.filter(c=>c.method==='token'&&c.args.action==='reset').length,beforeRoute);
+  await b.evaluate("location.hash='overview'");await b.wait(()=>b.evaluate("document.querySelector('h1').textContent==='CowPlay 管理'"),'return to receiver management');
+  checks.push('routing from a pending receiver confirmation to Tesla cancels it without a write');
   await value('分辨率上限','custom');await value('自定义分辨率','1280x800');await value('帧率上限','30');await click('保存画面上限');
   await b.wait(()=>b.evaluate("!!document.querySelector('dialog[open]')"),'save confirmation');await click('保存并应用');
   await b.wait(()=>b.evaluate("document.querySelector('#feedback').textContent.includes('已保存并应用')"),'saved policy');
@@ -60,7 +66,7 @@ try {
   checks.push('optional code disable cancel, explicit disable and reenable');
   await click('替换 HTTPS 证书');await b.wait(()=>b.evaluate("document.querySelector('#feedback').textContent.includes('请选择证书链和私钥')"),'missing certificate');
   assert.ok(calls.every(c=>c.origin===origin&&!c.cookie));
-  assert.equal(await b.evaluate('localStorage.length+sessionStorage.length'),0);assert.equal(await b.evaluate('location.href'),origin+'/manage');
+  assert.equal(await b.evaluate('localStorage.length+sessionStorage.length'),0);assert.equal(await b.evaluate('location.href'),origin+'/manage#overview');
   shots.push(await b.shot('linux-management-1280'));
   await b.viewport(390,844);assert.ok(await b.evaluate('document.documentElement.scrollWidth<=innerWidth'));shots.push(await b.shot('linux-management-390'));
   await click('退出管理');assert.ok(await b.evaluate("!!document.querySelector('[aria-label=管理令牌]')"));

@@ -21,6 +21,26 @@ async function scenario(name, source, run) {
   finally {await browser.close();await service.close();}
 }
 
+await scenario('local channel keeps working with an offline hint and detects missing pongs despite unrelated messages',
+ `Object.defineProperty(navigator,'onLine',{get:()=>false});window.hellos=0;window.pongs=0;const Native=window.WebSocket;window.WebSocket=class extends Native{constructor(...args){super(...args);this.addEventListener('message',event=>{if(typeof event.data!=='string')return;const message=JSON.parse(event.data);if(message.type==='hello')hellos++;if(message.type==='pong')pongs++;})}};`,async(b,s)=>{
+ await b.goto('about:blank');await s.fixture({stopped:false,resetAttempts:true});await b.goto(s.origin+'/car?heartbeat');
+ await b.wait(async()=>(await s.fixture({})).wsAttempts===1,'local socket starts despite offline hint');
+ await b.wait(()=>b.evaluate('hellos===1&&pongs>0'),'hello and a real pong confirm a healthy open channel');
+ await b.evaluate("window.dispatchEvent(new Event('offline'))");
+ const initial=(await s.fixture({pongHold:true,rejectNewWS:true})).wsAttempts;
+ const traffic=setInterval(()=>{void s.fixture({wsText:{type:'notice'}});},500);
+ try{
+  await b.wait(async()=>(await s.fixture({})).wsAttempts>initial,'missing pongs close a blackholed channel and start bounded recovery');
+  await b.wait(()=>b.evaluate("document.body.textContent.includes('自动重连 4 次仍未成功')"),'four retries are exhausted',20000);
+  assert.equal((await s.fixture({})).wsAttempts,initial+4);
+  await b.evaluate('new Promise(r=>setTimeout(r,1200))');assert.equal((await s.fixture({})).wsAttempts,initial+4);
+ }finally{clearInterval(traffic);}
+ await s.fixture({rejectNewWS:false,pongHold:false});
+ await b.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+ await b.wait(()=>b.evaluate('hellos===2'),'explicit page resume completes a fresh hello after the bounded retry budget');
+ assert.equal((await s.fixture({})).wsAttempts,initial+5);
+});
+
 await scenario('valid authorization and rejected state must not restart admission', `
   window.authReads=0;window.authPosts=0;window.denyState=true;
   const original=window.fetch;
@@ -85,17 +105,14 @@ await scenario('a failed authorization recheck freezes media then recovers witho
   await b.wait(()=>b.evaluate("document.body.dataset.view==='session'&&!document.body.classList.contains('stalled')"),'new frames restore view');
 });
 
-await scenario('build mismatch keeps authorization and waits for an explicit refresh',
+await scenario('page reset reloads fresh assets and keeps browser admission',
   'window.pageInstance=crypto.randomUUID()',async(b,s)=>{
-  await b.wait(async()=>(await s.fixture({})).wsAttempts>0,'socket');
+  await s.fixture({stopped:false});
+  await b.wait(()=>b.evaluate("!!document.querySelector('#car-reset-page')"),'direct cache reset entry');
   const page=await b.evaluate('pageInstance');
-  await s.fixture({wsText:{type:'error',code:'CLIENT_BUILD_MISMATCH'}});
-  await b.wait(()=>b.evaluate("[...document.querySelectorAll('#c-body button')].some(b=>b.textContent==='刷新页面')"),'refresh action');
-  assert.equal(await b.evaluate('pageInstance'),page);
-  assert.equal(await b.evaluate("document.querySelector('#token-layer').hidden"),true);
-  await b.evaluate("[...document.querySelectorAll('#c-body button')].find(b=>b.textContent==='刷新页面').click()");
-  await b.wait(()=>b.evaluate(`pageInstance!==${JSON.stringify(page)}`),'user refresh');
-  await b.wait(()=>b.evaluate("document.querySelector('#token-layer').hidden"),'authorization survives reload');
+  await b.evaluate("document.querySelector('#car-reset-page').click()");
+  await b.wait(()=>b.evaluate(`pageInstance!==${JSON.stringify(page)}&&location.pathname==='/car'&&new URL(location.href).searchParams.has('cowplay_refresh')`),'cache reset opens a fresh page');
+  await b.wait(()=>b.evaluate("document.querySelector('#token-layer').hidden"),'authorization survives cache reset');
 });
 
 await scenario('a token ACK without a saved cookie cannot flash an authorized page',`

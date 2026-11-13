@@ -94,6 +94,13 @@ mod tests {
     }
     #[tokio::test]
     async fn common_bundle_refreshes_selftest_and_rejects_old_connection_check() {
+        if std::env::var_os("COWPLAY_DIAGNOSTIC_CONTEXT_ISOLATED").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "admin::diagnostics::tests::common_bundle_refreshes_selftest_and_rejects_old_connection_check", "--nocapture"])
+                .env("COWPLAY_DIAGNOSTIC_CONTEXT_ISOLATED", "1").output().unwrap();
+            assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
         let (manager,_server,hub,dir)=crate::bluetooth::recovery_tests::admin_fixture().await;
         let a=Admin::new(manager,hub,"https://test.invalid".into(),dir.path().join("cowplay.uci"),dir.path().join("config"),dir.path().to_owned(),"cert".into(),"key".into(),"127.0.0.1:8080".parse().unwrap(),"127.0.0.1:7000".parse().unwrap(),None,(800,480)).unwrap();
         *a.selftest.lock().unwrap()=Some(json!({"ts_ms":1,"checks":[{"id":"link","status":"ok","detail":"old X success"}]}));

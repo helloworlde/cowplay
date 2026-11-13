@@ -22,12 +22,17 @@ with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
         name = entry.name.split('/', 1)[1]
         resources = 'modules/luci-base/htdocs/luci-static/resources/'
         theme = 'themes/luci-theme-bootstrap/htdocs/luci-static/bootstrap/'
+        material = 'themes/luci-theme-material/htdocs/luci-static/material/'
         if name.startswith(resources):
             relative = name[len(resources):]
         elif name.startswith(theme):
             relative = 'themes/' + name[len(theme):]
             if relative == 'themes/cascade.css':
                 relative = 'themes/bootstrap.css'
+        elif name.startswith(material):
+            relative = 'themes/' + name[len(material):]
+            if relative == 'themes/cascade.css':
+                relative = 'themes/material.css'
         else:
             continue
         target = output / relative
