@@ -12,6 +12,18 @@ try {
  const click=async text=>{assert.ok(await b.evaluate(`(()=>{const e=[...document.querySelectorAll('button,a')].find(e=>e.offsetParent!==null&&e.textContent.trim()===${JSON.stringify(text)});if(!e||e.disabled)return false;e.click();return true})()`),text)};
  const calls=async()=>await(await fetch(luci.origin+'/__calls')).json();
  const patch=async updateState=>fetch(luci.origin+'/__fixture',{method:'POST',body:JSON.stringify({updateState})});
+ const runningBuild=async build=>fetch(luci.origin+'/__fixture',{method:'POST',body:JSON.stringify({statusPatch:{version:'0.0.2',build}})});
+ await runningBuild('cowplay-0.0.2-r5-ui-consistency-20261113');
+ await b.wait(()=>b.evaluate("(async()=>(await L.require('view.cowplay.main')).data.build==='cowplay-0.0.2-r5-ui-consistency-20261113')()"),'running build observed');
+ await patch({installed:{cowplay:'0.0.2-r5','luci-app-cowplay':'0.0.2-r5'}});
+ await b.wait(()=>b.evaluate("document.querySelector('[data-cw-updater]').textContent.includes('0.0.2-r5 / 0.0.2-r5')"),'installed revision');
+ assert.equal(await b.evaluate("document.querySelector('[data-cw-updater]').textContent.includes('重启 CowPlay 后才会')"),false,'same running package revision needs no restart');
+ await patch({installed:{cowplay:'0.0.2-r6','luci-app-cowplay':'0.0.2-r6'}});
+ await b.wait(()=>b.evaluate("document.querySelector('[data-cw-updater]').textContent.includes('正在运行 0.0.2-r5；重启 CowPlay 后才会')"),'different running revision needs restart');
+ await runningBuild('unknown-build');
+ await b.wait(()=>b.evaluate("!document.querySelector('[data-cw-updater]').textContent.includes('重启 CowPlay 后才会')"),'unknown build cannot prove a revision mismatch');
+ await patch({installed:{cowplay:'0.3.14-r16','luci-app-cowplay':'0.3.14-r16'}});
+ checks.push('running package revision comes from the build; matching and unknown revisions never suggest a restart');
  await click('检查 GitHub 版本');await b.wait(()=>b.evaluate("document.querySelector('[data-cw-updater]').textContent.includes('0.3.15-r0 / aarch64_generic')"),'signed candidate');
  assert.ok((await calls()).some(c=>c.method==='update_check'&&c.args.tag===''));
  assert.ok((await calls()).some(c=>c.method==='update_check'&&c.args.channel==='stable'));

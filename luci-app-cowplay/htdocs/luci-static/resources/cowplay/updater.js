@@ -4,7 +4,7 @@
 'require cowplay.confirmation as confirmation';
 
 return L.Class.extend({
-    render: function(isCurrent, onBusy, canStart, runningVersion) {
+    render: function(isCurrent, onBusy, canStart, runningBuild) {
         var self = this, state = {}, busy = false, checking = false, selectionChanged = false, statusKnown = false;
         var channel = E('select', {class: 'cbi-input-select', 'aria-label': '更新渠道', change: function() { selectionChanged = true; sync(); }}, [E('option', {value: 'stable'}, '正式版'), E('option', {value: 'dev'}, '开发版（Pre-release）')]);
         var tag = E('input', {type: 'text', class: 'cbi-input-text', placeholder: '留空检查所选渠道的最新版本', 'aria-label': 'GitHub 发布标签', maxlength: 64, input: function() { selectionChanged = true; sync(); }});
@@ -52,7 +52,7 @@ return L.Class.extend({
         function draw() {
             var installed = state.installed || {};
             if (!selectionChanged) channel.value = state.channel || 'stable';
-            info.replaceChildren(line('GitHub 仓库', state.repository), line('已安装核心 / LuCI', [(installed.cowplay || '未安装') + ' / ' + (installed['luci-app-cowplay'] || '未安装')].concat((function() { var running = runningVersion && runningVersion(), norm = function(v) { return String(v || '').replace(/^v/, ''); }; return installed.cowplay && running && norm(installed.cowplay) !== norm(running) ? [E('div', {class: 'cw-foot cw-error'}, '正在运行 ' + running + '；重启 CowPlay 后才会使用已安装版本。')] : []; })())), line('候选渠道', state.channel === 'dev' ? '开发版（Pre-release）' : '正式版'), line('所选版本 / 架构', state.version ? state.version + ' / ' + state.arch : '—'));
+            info.replaceChildren(line('GitHub 仓库', state.repository), line('已安装核心 / LuCI', [(installed.cowplay || '未安装') + ' / ' + (installed['luci-app-cowplay'] || '未安装')].concat((function() { var match = /^cowplay-(\d+\.\d+\.\d+-r\d+)(?:-|$)/.exec(runningBuild && runningBuild() || ''), running = match && match[1], norm = function(v) { return String(v || '').replace(/^v/, ''); }; return installed.cowplay && running && norm(installed.cowplay) !== norm(running) ? [E('div', {class: 'cw-foot cw-error'}, '正在运行 ' + running + '；重启 CowPlay 后才会使用已安装版本。')] : []; })())), line('候选渠道', state.channel === 'dev' ? '开发版（Pre-release）' : '正式版'), line('所选版本 / 架构', state.version ? state.version + ' / ' + state.arch : '—'));
             if (state.backup) info.appendChild(line('设备本地备份', state.backup));
             message.textContent = state.configuration_error || state.installed_error || state.message || '选择正式版或开发版渠道，再检查最新版本；也可输入所选渠道的版本标签。'; sync();
         }

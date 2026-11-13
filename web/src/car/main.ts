@@ -584,7 +584,11 @@ function closeControls(): void { viewEpoch++;app.sheet=false;resetStop();render(
 $('r-sheet').addEventListener('click', () => { if(app.sheet)closeControls();else{viewEpoch++;openControls();resetStop();} });
 $('sheet-done').addEventListener('click', closeControls);
 // The canvas stays inert until this click finishes, so dismissing cannot tap CarPlay.
-canvas.parentElement!.addEventListener('click', () => { if(app.sheet)closeControls(); });
+// Only a press that began while the controls were open dismisses them; releasing a
+// contact held from before they opened still clicks the container and must not.
+let dismissPress=false;
+canvas.parentElement!.addEventListener('pointerdown', () => { dismissPress=app.sheet; });
+canvas.parentElement!.addEventListener('click', () => { if(app.sheet&&dismissPress)closeControls();dismissPress=false; });
 $('sheet-all').addEventListener('click', e => { e.preventDefault(); location.hash = 'settings'; });
 $('sheet-manage').addEventListener('click', e => { e.preventDefault(); location.hash = 'settings/phones'; });
 const stopBtn = $('sheet-stop');
